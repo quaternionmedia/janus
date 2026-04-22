@@ -1,0 +1,17 @@
+.dev
+dev.*
+*/bin
+*/obj
+*.log
+*.tmp
+*.cache
+*.user
+*.pyc
+*.swp
+*.sln.docstates
+*.vs
+*.vscode
+*.DS_Store
+*.suo
+*.pdb
+*.key

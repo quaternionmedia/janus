@@ -1,0 +1,936 @@
+#!/usr/bin/env python3
+import os
+import queue
+import select
+import signal
+import sys
+import termios
+import threading
+import time
+
+import serial
+from evdev import InputDevice, ecodes
+
+
+# Per-event debug logs. Leave False for normal operation; flip to True to
+# trace MOUSE MOVE deltas and CURSOR SYNC updates line by line when
+# diagnosing switching or movement problems.
+VERBOSE = False
+
+running = True
+
+
+def handle_signal(signum, frame):
+    global running
+    running = False
+
+
+def configure_uart(path: str) -> None:
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        attrs = termios.tcgetattr(fd)
+
+        attrs[0] = 0
+        attrs[1] = 0
+        attrs[2] = attrs[2] | termios.CLOCAL | termios.CREAD
+        attrs[2] = attrs[2] & ~termios.PARENB
+        attrs[2] = attrs[2] & ~termios.CSTOPB
+        attrs[2] = attrs[2] & ~termios.CSIZE
+        attrs[2] = attrs[2] | termios.CS8
+        attrs[3] = 0
+
+        attrs[4] = termios.B921600
+        attrs[5] = termios.B921600
+
+        attrs[6][termios.VMIN] = 0
+        attrs[6][termios.VTIME] = 1
+
+        termios.tcflush(fd, termios.TCIOFLUSH)
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    finally:
+        os.close(fd)
+
+
+def write_line(ser: serial.Serial, text: str) -> None:
+    ser.write((text + "\n").encode("utf-8"))
+    ser.flush()
+
+
+def open_serial(path: str) -> serial.Serial:
+    # Short timeout so the reader loop wakes frequently and can react to
+    # stop_event. The actual line-completion logic lives in serial_reader,
+    # which accumulates bytes across reads and doesn't depend on a single
+    # read() returning a full line.
+    ser = serial.Serial(path, 921600, timeout=0.05)
+
+    # CRITICAL: force the TTY out of canonical (line-buffered) mode.
+    # pyserial's Serial() constructor can leave the kernel TTY layer in
+    # canonical mode on Linux, where a single line is capped at ~4095
+    # bytes -- anything longer gets truncated silently. Our clipboard
+    # payloads (up to ~341 KB base64) absolutely need raw mode. Applying
+    # termios here, AFTER pyserial has finished its own setup, ensures
+    # our settings win regardless of pyserial version or platform quirks.
+    fd = ser.fileno()
+    attrs = termios.tcgetattr(fd)
+    attrs[0] = 0  # iflag: no input processing
+    attrs[1] = 0  # oflag: no output processing
+    attrs[3] = 0  # lflag: NOT canonical, NOT echo, NOT signal processing
+    attrs[6][termios.VMIN] = 0
+    attrs[6][termios.VTIME] = 1
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
+    return ser
+
+
+def serial_reader(name: str, ser: serial.Serial, out_queue: queue.Queue[str], stop_event: threading.Event) -> None:
+    """Read bytes from `ser`, accumulate into lines on `\\n`, enqueue each.
+
+    Do NOT rely on `ser.readline()` because pyserial's readline returns on
+    timeout whether or not a newline has arrived, which corrupts long lines
+    (e.g., clipboard payloads larger than a single kernel-buffer chunk).
+    Instead, call `read()` in chunks and split on newlines ourselves.
+    """
+    # Upper bound on a single line. Has to comfortably exceed the largest
+    # legitimate CLIPBOARD payload (256 KB raw -> ~341 KB base64 plus the
+    # "CLIPBOARD DATA TEXT=" prefix). Anything longer gets discarded as
+    # corrupt framing to keep a single bad transfer from unbounded growth.
+    max_line_bytes = 512 * 1024
+    buffer = bytearray()
+    try:
+        while not stop_event.is_set():
+            try:
+                # Read whatever is available, up to a generous chunk size.
+                # in_waiting may be 0 if no bytes have arrived; fall back
+                # to a blocking read (size=1) that respects the 50 ms
+                # timeout so the loop can observe stop_event.
+                pending = ser.in_waiting
+                if pending > 0:
+                    chunk = ser.read(min(pending, 65536))
+                else:
+                    chunk = ser.read(1)
+            except Exception as ex:
+                out_queue.put(f"ERROR {name} {ex}")
+                return
+
+            if not chunk:
+                continue
+
+            buffer.extend(chunk)
+
+            # Pull out every complete line currently in the buffer.
+            while True:
+                newline_index = buffer.find(b"\n")
+                if newline_index < 0:
+                    break
+
+                raw_line = bytes(buffer[:newline_index])
+                del buffer[: newline_index + 1]
+
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if line:
+                    out_queue.put(f"{name}|{line}")
+
+            # Guard against a runaway line (no newline ever arrives). If
+            # the buffer balloons past the legitimate max, throw it away
+            # rather than consuming memory forever.
+            if len(buffer) > max_line_bytes:
+                out_queue.put(
+                    f"ERROR {name} discarding runaway line of {len(buffer)} bytes"
+                )
+                buffer.clear()
+    except Exception as ex:
+        out_queue.put(f"ERROR {name} {ex}")
+
+
+def log_unhandled_mouse_key(event):
+    code_name = ecodes.bytype.get(ecodes.EV_KEY, {}).get(event.code, f"UNKNOWN_{event.code}")
+    print(f"UNHANDLED MOUSE KEY: code={event.code} name={code_name} value={event.value}")
+
+
+def log_unhandled_mouse_rel(event):
+    code_name = ecodes.bytype.get(ecodes.EV_REL, {}).get(event.code, f"UNKNOWN_{event.code}")
+    print(f"UNHANDLED MOUSE REL: code={event.code} name={code_name} value={event.value}")
+
+
+def log_unhandled_keyboard_key(event):
+    key_name = ecodes.KEY.get(event.code, f"UNKNOWN_{event.code}")
+    print(f"UNHANDLED KEYBOARD KEY: code={event.code} name={key_name} value={event.value}")
+
+
+def release_all_inputs(active_serial: serial.Serial,
+                       left_button_down: bool, right_button_down: bool, middle_button_down: bool,
+                       pressed_keys: set[str]) -> None:
+    if left_button_down:
+        write_line(active_serial, "MOUSE BUTTON LEFT=UP")
+    if right_button_down:
+        write_line(active_serial, "MOUSE BUTTON RIGHT=UP")
+    if middle_button_down:
+        write_line(active_serial, "MOUSE BUTTON MIDDLE=UP")
+
+    for key_name in pressed_keys:
+        write_line(active_serial, f"KEY NAME={key_name} STATE=UP")
+
+
+def handle_keyboard_event(event, target_serial: serial.Serial, pressed_keys: set[str]) -> bool:
+    key_name = ecodes.KEY.get(event.code)
+
+    if not isinstance(key_name, str):
+        log_unhandled_keyboard_key(event)
+        return False
+
+    if not key_name.startswith("KEY_"):
+        log_unhandled_keyboard_key(event)
+        return False
+
+    if event.value == 1:
+        state = "DOWN"
+    elif event.value == 0:
+        state = "UP"
+    elif event.value == 2:
+        state = "DOWN"
+    else:
+        log_unhandled_keyboard_key(event)
+        return False
+
+    if state == "DOWN":
+        pressed_keys.add(key_name)
+    elif state == "UP":
+        pressed_keys.discard(key_name)
+
+    write_line(target_serial, f"KEY NAME={key_name} STATE={state}")
+    return True
+
+
+def parse_keyed_int(token: str, expected_key: str) -> int | None:
+    parts = token.split("=", 1)
+    if len(parts) != 2:
+        return None
+
+    key, value = parts
+    if key.upper() != expected_key.upper():
+        return None
+
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def handle_display_line(
+    line: str,
+    personal_display: dict[str, int],
+    work_display: dict[str, int],
+) -> bool:
+    parts = line.split()
+
+    if len(parts) != 6 or parts[0] != "DISPLAY":
+        return False
+
+    device_id = parts[1]
+
+    left = parse_keyed_int(parts[2], "L")
+    top = parse_keyed_int(parts[3], "T")
+    width = parse_keyed_int(parts[4], "W")
+    height = parse_keyed_int(parts[5], "H")
+
+    if None in (left, top, width, height):
+        print(f"Ignoring invalid DISPLAY line: {line}")
+        return True
+
+    target = None
+    if device_id == "P":
+        target = personal_display
+    elif device_id == "W":
+        target = work_display
+    else:
+        print(f"Ignoring unknown display device id: {device_id}")
+        return True
+
+    changed = (
+        target["L"] != left
+        or target["T"] != top
+        or target["W"] != width
+        or target["H"] != height
+    )
+
+    target["L"] = left
+    target["T"] = top
+    target["W"] = width
+    target["H"] = height
+
+    if changed:
+        print(
+            "DISPLAY | "
+            f'P: L={personal_display["L"]} T={personal_display["T"]} W={personal_display["W"]} H={personal_display["H"]} | '
+            f'W: L={work_display["L"]} T={work_display["T"]} W={work_display["W"]} H={work_display["H"]}'
+        )
+
+    return True
+
+
+def handle_cursor_line(
+    line: str,
+    personal_cursor: dict[str, int],
+    work_cursor: dict[str, int],
+) -> bool:
+    parts = line.split()
+
+    if len(parts) != 4 or parts[0] != "CURSOR":
+        return False
+
+    device_id = parts[1]
+
+    x = parse_keyed_int(parts[2], "X")
+    y = parse_keyed_int(parts[3], "Y")
+
+    if None in (x, y):
+        return True
+
+    # CURSOR SYNC values from the agent are in absolute virtual-screen
+    # coordinates, matching how we store personal_cursor / work_cursor.
+    if device_id == "P":
+        personal_cursor["X"] = x
+        personal_cursor["Y"] = y
+        if VERBOSE:
+            print(f"CURSOR SYNC P X={x} Y={y}")
+    elif device_id == "W":
+        work_cursor["X"] = x
+        work_cursor["Y"] = y
+        if VERBOSE:
+            print(f"CURSOR SYNC W X={x} Y={y}")
+
+    return True
+
+
+def handle_serial_line(
+    source_name: str,
+    line: str,
+    personal_serial: serial.Serial,
+    work_serial: serial.Serial,
+    personal_display: dict[str, int],
+    work_display: dict[str, int],
+    personal_cursor: dict[str, int],
+    work_cursor: dict[str, int],
+) -> None:
+    if handle_display_line(line, personal_display, work_display):
+        return
+
+    if handle_cursor_line(line, personal_cursor, work_cursor):
+        return
+
+    if line.startswith("TARGET "):
+        return
+
+    if line.startswith("CLIPBOARD DATA "):
+        destination_serial = work_serial if source_name == "P" else personal_serial
+        destination_name = "W" if source_name == "P" else "P"
+
+        # Relay verbatim except for the verb rename. Do not parse the
+        # payload on the router — base64 strings can be quite large and
+        # parsing them here would just waste cycles.
+        write_line(destination_serial, line.replace("CLIPBOARD DATA", "CLIPBOARD SET", 1))
+        # Log byte count so it's easy to see whether truncation happened
+        # anywhere downstream.
+        print(f"clipboard forwarded: {source_name} -> {destination_name} ({len(line)} chars)")
+        return
+
+    if line == "CLIPBOARD CLEAR":
+        destination_serial = work_serial if source_name == "P" else personal_serial
+        destination_name = "W" if source_name == "P" else "P"
+
+        write_line(destination_serial, "CLIPBOARD CLEAR")
+        print(f"clipboard CLEAR forwarded: {source_name} -> {destination_name}")
+        return
+
+    print(f"unhandled serial line from {source_name}: {line}")
+
+
+def clamp(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(value, maximum))
+
+
+def send_cursor_set(ser: serial.Serial, x: int, y: int) -> None:
+    write_line(ser, f"CURSOR SET X={x} Y={y}")
+
+
+def main() -> int:
+    global running
+
+    if len(sys.argv) != 5:
+        print(
+            "Usage: python3 input_router.py "
+            "/dev/input/mouse_eventX /dev/input/keyboard_eventY "
+            "/dev/ttyAMA_PERSONAL /dev/ttyAMA_WORK",
+            file=sys.stderr,
+        )
+        return 1
+
+    mouse_path = sys.argv[1]
+    keyboard_path = sys.argv[2]
+    personal_uart_path = sys.argv[3]
+    work_uart_path = sys.argv[4]
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+    combined_input_device = mouse_path == keyboard_path
+
+    try:
+        mouse = InputDevice(mouse_path)
+    except OSError as ex:
+        print(f"Failed to open mouse device {mouse_path}: {ex}", file=sys.stderr)
+        return 1
+
+    try:
+        keyboard = InputDevice(keyboard_path)
+    except OSError as ex:
+        print(f"Failed to open keyboard device {keyboard_path}: {ex}", file=sys.stderr)
+        mouse.close()
+        return 1
+
+    try:
+        configure_uart(personal_uart_path)
+        configure_uart(work_uart_path)
+    except Exception as ex:
+        print(f"Failed to configure UART: {ex}", file=sys.stderr)
+        mouse.close()
+        keyboard.close()
+        return 1
+
+    try:
+        personal_serial = open_serial(personal_uart_path)
+        print(f"personal uart connected: {personal_uart_path}")
+    except Exception as ex:
+        print(f"Failed to open personal uart {personal_uart_path}: {ex}", file=sys.stderr)
+        mouse.close()
+        keyboard.close()
+        return 1
+
+    try:
+        work_serial = open_serial(work_uart_path)
+        print(f"work uart connected: {work_uart_path}")
+    except Exception as ex:
+        print(f"Failed to open work uart {work_uart_path}: {ex}", file=sys.stderr)
+        personal_serial.close()
+        mouse.close()
+        keyboard.close()
+        return 1
+
+    serial_lines: queue.Queue[str] = queue.Queue()
+    stop_event = threading.Event()
+
+    readers = [
+        threading.Thread(
+            target=serial_reader,
+            args=("P", personal_serial, serial_lines, stop_event),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=serial_reader,
+            args=("W", work_serial, serial_lines, stop_event),
+            daemon=True,
+        ),
+    ]
+
+    for reader in readers:
+        reader.start()
+
+    active_target = "P"
+
+    # All cursor/display values below are kept in ABSOLUTE virtual-screen
+    # coordinates: the same frame the agent reports via CURSOR and DISPLAY
+    # lines and the same frame CURSOR SET consumes. Do not mix with per-
+    # monitor local coordinates anywhere in this file.
+    personal_display = {"L": 0, "T": 0, "W": 0, "H": 0}
+    work_display = {"L": 0, "T": 0, "W": 0, "H": 0}
+    personal_cursor = {"X": 0, "Y": 0}
+    work_cursor = {"X": 0, "Y": 0}
+
+    p_to_w_push = 0
+    w_to_p_push = 0
+    auto_switch_enabled = True
+
+    EDGE_ARM_PIXELS = 2
+    SWITCH_PUSH_PIXELS = 12
+    SWITCH_ENTRY_MARGIN_Y = 32
+    # Brief window after any switch during which edge-arming is suppressed,
+    # so a reversal of mouse direction immediately after landing can't
+    # ping-pong the cursor back to the previous side.
+    SWITCH_COOLDOWN_SECONDS = 0.15
+    last_switch_time = 0.0
+
+    # Periodically broadcast the current TARGET to both agents. This lets a
+    # late-joining agent (started after the router, or after a crash/restart)
+    # learn its active/inactive state within a bounded time without any
+    # explicit handshake. Agents that already know their state just see a
+    # same-value TARGET line and ignore it.
+    TARGET_ANNOUNCE_INTERVAL_SECONDS = 2.0
+    last_target_announce_time = 0.0
+
+    mouse_dx = 0
+    mouse_dy = 0
+    mouse_wheel = 0
+    mouse_wheel_hi_res_accum = 0
+    mouse_hwheel = 0
+    mouse_hwheel_hi_res_accum = 0
+    left_button_down = False
+    right_button_down = False
+    middle_button_down = False
+    pressed_keys = set()
+
+    print("Janus.InputRouter started. Press Ctrl+C to stop.")
+    print(f"mouse:    {mouse.path}")
+    print(f"mouse nm: {mouse.name}")
+    if combined_input_device:
+        print(f"input:    combined mouse+keyboard on {mouse.path}")
+    else:
+        print(f"keybd:    {keyboard.path}")
+        print(f"keybd nm: {keyboard.name}")
+    print(f"personal: {personal_uart_path}")
+    print(f"work:     {work_uart_path}")
+    print("commands: p=personal, w=work, c=clipboard, q=quit")
+    print("active target: P")
+
+    try:
+        while running:
+            # Periodic TARGET announcement. Fires on the first iteration
+            # (last_target_announce_time == 0.0) and every interval after,
+            # so any agent that comes up later catches its state.
+            now = time.monotonic()
+            if now - last_target_announce_time >= TARGET_ANNOUNCE_INTERVAL_SECONDS:
+                write_line(personal_serial, f"TARGET {active_target}")
+                write_line(work_serial, f"TARGET {active_target}")
+                last_target_announce_time = now
+
+            # Process any lines read from the serial ports
+            while True:
+                try:
+                    queued = serial_lines.get_nowait()
+                except queue.Empty:
+                    break
+
+                if queued.startswith("ERROR "):
+                    print(queued, file=sys.stderr)
+                    continue
+
+                source_name, line = queued.split("|", 1)
+                handle_serial_line(
+                    source_name,
+                    line,
+                    personal_serial,
+                    work_serial,
+                    personal_display,
+                    work_display,
+                    personal_cursor,
+                    work_cursor
+                )
+
+            # Wait for input events or serial lines
+            #ready, _, _ = select.select([mouse.fd, keyboard.fd, sys.stdin], [], [], 0.2)
+            fds = [mouse.fd, sys.stdin] if combined_input_device else [mouse.fd, keyboard.fd, sys.stdin]
+            ready, _, _ = select.select(fds, [], [], 0.2)
+
+            # Check for user commands
+            if sys.stdin in ready:
+                command = sys.stdin.readline().strip().lower()
+
+                if command == "p":
+                    active_target = "P"
+                    p_to_w_push = 0
+                    w_to_p_push = 0
+
+                    if personal_display["W"] > 0 and personal_display["H"] > 0:
+                        entry_x = clamp(
+                            personal_cursor["X"],
+                            personal_display["L"],
+                            personal_display["L"] + personal_display["W"] - 1,
+                        )
+                        entry_y = clamp(
+                            personal_cursor["Y"],
+                            personal_display["T"],
+                            personal_display["T"] + personal_display["H"] - 1,
+                        )
+                    else:
+                        entry_x = 0
+                        entry_y = 0
+
+                    write_line(personal_serial, "TARGET P")
+                    write_line(work_serial, "TARGET P")
+
+                    send_cursor_set(personal_serial, entry_x, entry_y)
+
+                    personal_cursor["X"] = entry_x
+                    personal_cursor["Y"] = entry_y
+
+                    last_switch_time = time.monotonic()
+                    last_target_announce_time = last_switch_time
+                    print("\n=== ACTIVE: PERSONAL ===\n")
+
+                elif command == "w":
+                    active_target = "W"
+                    p_to_w_push = 0
+                    w_to_p_push = 0
+
+                    if work_display["W"] > 0 and work_display["H"] > 0:
+                        entry_x = clamp(
+                            work_cursor["X"],
+                            work_display["L"],
+                            work_display["L"] + work_display["W"] - 1,
+                        )
+                        entry_y = clamp(
+                            work_cursor["Y"],
+                            work_display["T"],
+                            work_display["T"] + work_display["H"] - 1,
+                        )
+                    else:
+                        entry_x = 0
+                        entry_y = 0
+
+                    write_line(personal_serial, "TARGET W")
+                    write_line(work_serial, "TARGET W")
+
+                    send_cursor_set(work_serial, entry_x, entry_y)
+
+                    work_cursor["X"] = entry_x
+                    work_cursor["Y"] = entry_y
+
+                    last_switch_time = time.monotonic()
+                    last_target_announce_time = last_switch_time
+                    print("\n=== ACTIVE: WORK ===\n")
+
+                elif command == "c":
+                    target_serial = personal_serial if active_target == "P" else work_serial
+                    write_line(target_serial, "CLIPBOARD REQUEST")
+                    print(f"clipboard request sent to: {active_target}")
+
+                elif command == "q":
+                    running = False
+                    continue
+
+            target_serial = personal_serial if active_target == "P" else work_serial
+
+            # Handle mouse events
+            if mouse.fd in ready:
+                for event in mouse.read():
+                    # Mouse Wheel Events
+                    if event.type == ecodes.EV_REL:
+                        if event.code == ecodes.REL_X:
+                            mouse_dx += event.value
+
+                        elif event.code == ecodes.REL_Y:
+                            mouse_dy += event.value
+
+                        elif event.code == ecodes.REL_WHEEL:
+                            mouse_wheel += event.value
+
+                        elif event.code == ecodes.REL_WHEEL_HI_RES:
+                            mouse_wheel_hi_res_accum += event.value
+
+                            while mouse_wheel_hi_res_accum >= 120:
+                                mouse_wheel += 1
+                                mouse_wheel_hi_res_accum -= 120
+
+                            while mouse_wheel_hi_res_accum <= -120:
+                                mouse_wheel -= 1
+                                mouse_wheel_hi_res_accum += 120
+
+                        elif event.code == ecodes.REL_HWHEEL:
+                            mouse_hwheel += event.value
+
+                        elif event.code == ecodes.REL_HWHEEL_HI_RES:
+                            mouse_hwheel_hi_res_accum += event.value
+
+                            while mouse_hwheel_hi_res_accum >= 120:
+                                mouse_hwheel += 1
+                                mouse_hwheel_hi_res_accum -= 120
+
+                            while mouse_hwheel_hi_res_accum <= -120:
+                                mouse_hwheel -= 1
+                                mouse_hwheel_hi_res_accum += 120
+
+                        else:
+                            log_unhandled_mouse_rel(event)
+
+                    # Mouse Button Events
+                    elif event.type == ecodes.EV_KEY:
+                        if event.code == ecodes.BTN_LEFT:
+                            if event.value == 1:
+                                if not left_button_down:
+                                    left_button_down = True
+                                    if VERBOSE: print("MOUSE BUTTON LEFT=DOWN")
+                                    write_line(target_serial, "MOUSE BUTTON LEFT=DOWN")
+                            elif event.value == 0:
+                                if left_button_down:
+                                    left_button_down = False
+                                    if VERBOSE: print("MOUSE BUTTON LEFT=UP")
+                                    write_line(target_serial, "MOUSE BUTTON LEFT=UP")
+                            elif event.value == 2:
+                                pass
+
+                        elif event.code == ecodes.BTN_RIGHT:
+                            if event.value == 1:
+                                if not right_button_down:
+                                    right_button_down = True
+                                    if VERBOSE: print("MOUSE BUTTON RIGHT=DOWN")
+                                    write_line(target_serial, "MOUSE BUTTON RIGHT=DOWN")
+                            elif event.value == 0:
+                                if right_button_down:
+                                    right_button_down = False
+                                    if VERBOSE: print("MOUSE BUTTON RIGHT=UP")
+                                    write_line(target_serial, "MOUSE BUTTON RIGHT=UP")
+                            elif event.value == 2:
+                                pass
+
+                        elif event.code == ecodes.BTN_MIDDLE:
+                            if event.value == 1:
+                                if not middle_button_down:
+                                    middle_button_down = True
+                                    if VERBOSE: print("MOUSE BUTTON MIDDLE=DOWN")
+                                    write_line(target_serial, "MOUSE BUTTON MIDDLE=DOWN")
+                            elif event.value == 0:
+                                if middle_button_down:
+                                    middle_button_down = False
+                                    if VERBOSE: print("MOUSE BUTTON MIDDLE=UP")
+                                    write_line(target_serial, "MOUSE BUTTON MIDDLE=UP")
+                            elif event.value == 2:
+                                pass
+
+                        # Some combined input devices (like certain Logitech models)
+                        # report some keyboard keys as mouse buttons. Handle those here.
+                        elif combined_input_device:
+                            if handle_keyboard_event(event, target_serial, pressed_keys):
+                                continue
+
+                        else:
+                            log_unhandled_mouse_key(event)
+
+                    # Mouse Movement Events (sent on SYN_REPORT)
+                    elif event.type == ecodes.EV_SYN and event.code == ecodes.SYN_REPORT:
+                        if mouse_dx != 0 or mouse_dy != 0:
+                            cooling_down = (
+                                time.monotonic() - last_switch_time < SWITCH_COOLDOWN_SECONDS
+                            )
+
+                            if active_target == "P":
+                                # Everything below is in absolute virtual-screen
+                                # coordinates.
+                                p_l = personal_display["L"]
+                                p_t = personal_display["T"]
+                                p_w = personal_display["W"]
+                                p_h = personal_display["H"]
+
+                                if p_w > 0 and p_h > 0:
+                                    personal_cursor["X"] = clamp(
+                                        personal_cursor["X"] + mouse_dx,
+                                        p_l,
+                                        p_l + p_w - 1,
+                                    )
+                                    personal_cursor["Y"] = clamp(
+                                        personal_cursor["Y"] + mouse_dy,
+                                        p_t,
+                                        p_t + p_h - 1,
+                                    )
+
+                                cursor_x = personal_cursor["X"]
+                                cursor_y = personal_cursor["Y"]
+
+                                # Arm on Personal's bottom edge (absolute frame).
+                                # Suppress arming entirely during the post-switch
+                                # cooldown.
+                                #
+                                # Reset only when the user either leaves the edge
+                                # zone or actively pushes back (mouse_dy < 0).
+                                # A SYN cycle with horizontal jitter (mouse_dy == 0)
+                                # must NOT reset the counter; otherwise slow
+                                # diagonal motion never reaches threshold.
+                                if cooling_down:
+                                    p_to_w_push = 0
+                                elif p_w > 0 and p_h > 0:
+                                    bottom_arm = p_t + p_h - 1 - EDGE_ARM_PIXELS
+                                    was_armed = p_to_w_push > 0
+                                    in_zone = cursor_y >= bottom_arm
+
+                                    if not in_zone or mouse_dy < 0:
+                                        p_to_w_push = 0
+                                    elif mouse_dy > 0:
+                                        p_to_w_push += mouse_dy
+                                    # mouse_dy == 0: keep current push as-is
+
+                                    # Only log the transition into armed state,
+                                    # not every event that keeps it armed.
+                                    if not was_armed and p_to_w_push > 0:
+                                        print(
+                                            f"AUTO P->W arming cursor_y={cursor_y} "
+                                            f"threshold={bottom_arm}"
+                                        )
+
+                                if (p_to_w_push >= SWITCH_PUSH_PIXELS
+                                        and work_display["W"] > 0 and work_display["H"] > 0):
+                                    active_target = "W"
+                                    p_to_w_push = 0
+                                    w_to_p_push = 0
+
+                                    w_l = work_display["L"]
+                                    w_t = work_display["T"]
+                                    w_w = work_display["W"]
+
+                                    # Preserve X offset from the source monitor's
+                                    # left edge; clamp into the target monitor's
+                                    # horizontal bounds.
+                                    source_x_offset = cursor_x - p_l
+                                    entry_x = clamp(
+                                        w_l + source_x_offset,
+                                        w_l,
+                                        w_l + w_w - 1,
+                                    )
+                                    entry_y = w_t + SWITCH_ENTRY_MARGIN_Y
+
+                                    write_line(personal_serial, "TARGET W")
+                                    write_line(work_serial, "TARGET W")
+                                    send_cursor_set(work_serial, entry_x, entry_y)
+
+                                    work_cursor["X"] = entry_x
+                                    work_cursor["Y"] = entry_y
+
+                                    last_switch_time = time.monotonic()
+                                    last_target_announce_time = last_switch_time
+                                    print("\n=== ACTIVE: WORK (AUTO) ===\n")
+                                    mouse_dx = 0
+                                    mouse_dy = 0
+                                    continue
+
+                            elif active_target == "W":
+                                w_l = work_display["L"]
+                                w_t = work_display["T"]
+                                w_w = work_display["W"]
+                                w_h = work_display["H"]
+
+                                if w_w > 0 and w_h > 0:
+                                    work_cursor["X"] = clamp(
+                                        work_cursor["X"] + mouse_dx,
+                                        w_l,
+                                        w_l + w_w - 1,
+                                    )
+                                    work_cursor["Y"] = clamp(
+                                        work_cursor["Y"] + mouse_dy,
+                                        w_t,
+                                        w_t + w_h - 1,
+                                    )
+
+                                cursor_x = work_cursor["X"]
+                                cursor_y = work_cursor["Y"]
+
+                                # Arm on Work's top edge (absolute frame).
+                                # Same reset discipline as P->W: only reset
+                                # when leaving the edge zone or pushing back
+                                # downward. A SYN cycle with x-only motion
+                                # (mouse_dy == 0) must preserve the counter.
+                                if cooling_down:
+                                    w_to_p_push = 0
+                                elif w_w > 0 and w_h > 0:
+                                    top_arm = w_t + EDGE_ARM_PIXELS
+                                    was_armed = w_to_p_push > 0
+                                    in_zone = cursor_y <= top_arm
+
+                                    if not in_zone or mouse_dy > 0:
+                                        w_to_p_push = 0
+                                    elif mouse_dy < 0:
+                                        w_to_p_push += -mouse_dy
+                                    # mouse_dy == 0: keep current push as-is
+
+                                    if not was_armed and w_to_p_push > 0:
+                                        print(
+                                            f"AUTO W->P arming cursor_y={cursor_y} "
+                                            f"threshold={top_arm}"
+                                        )
+
+                                if (w_to_p_push >= SWITCH_PUSH_PIXELS
+                                        and personal_display["W"] > 0 and personal_display["H"] > 0):
+                                    active_target = "P"
+                                    p_to_w_push = 0
+                                    w_to_p_push = 0
+
+                                    p_l = personal_display["L"]
+                                    p_t = personal_display["T"]
+                                    p_w = personal_display["W"]
+                                    p_h = personal_display["H"]
+
+                                    source_x_offset = cursor_x - w_l
+                                    entry_x = clamp(
+                                        p_l + source_x_offset,
+                                        p_l,
+                                        p_l + p_w - 1,
+                                    )
+                                    entry_y = p_t + p_h - 1 - SWITCH_ENTRY_MARGIN_Y
+
+                                    write_line(personal_serial, "TARGET P")
+                                    write_line(work_serial, "TARGET P")
+                                    send_cursor_set(personal_serial, entry_x, entry_y)
+
+                                    personal_cursor["X"] = entry_x
+                                    personal_cursor["Y"] = entry_y
+
+                                    last_switch_time = time.monotonic()
+                                    last_target_announce_time = last_switch_time
+                                    print("\n=== ACTIVE: PERSONAL (AUTO) ===\n")
+                                    mouse_dx = 0
+                                    mouse_dy = 0
+                                    continue
+
+                            target_serial = personal_serial if active_target == "P" else work_serial
+                            if VERBOSE:
+                                print(f"MOUSE MOVE target={active_target} dx={mouse_dx} dy={mouse_dy}")
+                            write_line(target_serial, f"MOUSE MOVE DX={mouse_dx} DY={mouse_dy}")
+
+                            mouse_dx = 0
+                            mouse_dy = 0
+
+                        if mouse_wheel != 0:
+                            target_serial = personal_serial if active_target == "P" else work_serial
+                            write_line(target_serial, f"MOUSE WHEEL DELTA={mouse_wheel}")
+                            mouse_wheel = 0
+
+                        if mouse_hwheel != 0:
+                            target_serial = personal_serial if active_target == "P" else work_serial
+                            write_line(target_serial, f"MOUSE HWHEEL DELTA={mouse_hwheel}")
+                            mouse_hwheel = 0
+
+            # Handle keyboard events
+            if not combined_input_device and keyboard.fd in ready:
+                for event in keyboard.read():
+                    if event.type != ecodes.EV_KEY:
+                        continue
+
+                    if handle_keyboard_event(event, target_serial, pressed_keys):
+                        continue
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            release_all_inputs(
+                target_serial,
+                left_button_down,
+                right_button_down,
+                middle_button_down,
+                pressed_keys,
+            )
+        except Exception as ex:
+            print(f"release_all_inputs error: {ex}")
+
+        left_button_down = False
+        right_button_down = False
+        middle_button_down = False
+        pressed_keys.clear()
+
+        stop_event.set()
+        personal_serial.close()
+        work_serial.close()
+        mouse.close()
+        keyboard.close()
+        print("Janus.InputRouter stopping.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
