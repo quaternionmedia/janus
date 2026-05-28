@@ -1,0 +1,16 @@
+[project]
+name = "janus-controller"
+version = "0.1.0"
+description = "Janus controller: routes mouse/keyboard input between two PC agents over UART."
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "pyserial>=3.5",
+    "evdev>=1.6",
+]
+
+[tool.uv]
+# Keep the venv inside the project directory so `uv run` from anywhere
+# in the tree lands in the same environment, and removal is one
+# `rm -rf .venv`.
+managed = true

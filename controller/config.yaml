@@ -1,0 +1,67 @@
+# Janus controller configuration.
+#
+# Loaded once at startup from controller/config.yaml. Restart the
+# controller to apply changes.
+#
+# Any value can be overridden at startup by a CLI flag of the same name:
+#     uv run input_router.py --mouse /dev/input/event7
+#
+# All fields are optional; omitted ones fall back to the defaults shown
+# below (which match the current hardcoded behavior).
+
+devices:
+  # Linux input device(s) for the mouse and keyboard. The Logitech K400
+  # exposes both on a single evdev node, so we set both to the same path
+  # and the router detects "combined input device" mode automatically.
+  # If your receiver enumerates them separately, set them to distinct
+  # /dev/input/eventN paths.
+  mouse: /dev/input/event5
+  keyboard: /dev/input/event5
+
+  # UARTs to the two bridges (Pi Zeros or Picos).
+  # Personal is on UART0 (GPIO 14/15). Work is on UART2 (GPIO 4/5, requires
+  # dtoverlay=uart2 in /boot/firmware/config.txt).
+  personal_uart: /dev/ttyAMA0
+  work_uart: /dev/ttyAMA2
+
+serial:
+  # UART line rate. Must match both bridges and both agents exactly.
+  baud: 921600
+
+switching:
+  # Cursor must be within this many pixels of the edge before push
+  # accumulation can begin.
+  edge_arm_pixels: 2
+
+  # Total pixels of sustained motion into the edge required before an
+  # auto-switch fires. Lower = snappier, higher = more deliberate.
+  switch_push_pixels: 12
+
+  # Vertical offset from the destination's top/bottom edge at which the
+  # cursor lands after a switch.
+  switch_entry_margin_y: 32
+
+  # Post-switch window during which edge arming is suppressed. Prevents
+  # a direction reversal right after landing from bouncing the cursor
+  # back to the previous side.
+  switch_cooldown_seconds: 0.15
+
+  # How often the controller re-broadcasts the current active target.
+  # Late-joining agents pick up their active/inactive state within one
+  # interval without an explicit handshake.
+  target_announce_interval_seconds: 2.0
+
+commands:
+  # Single-character commands typed in the controller terminal.
+  # Each must be exactly one character. Case-insensitive at runtime.
+  # All four must be distinct.
+  personal: p
+  work: w
+  clipboard: s
+  quit: q
+
+logging:
+  # When true, log every mouse-button event and MOUSE MOVE forward.
+  # Useful when debugging input issues; otherwise leave false to keep
+  # the controller log readable.
+  verbose: false

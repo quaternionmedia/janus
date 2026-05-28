@@ -47,10 +47,10 @@ supervisor.set_usb_identification(
     pid=0xCAFE,                # arbitrary PID we picked; unique within Janus
 )
 
-# Per-Pico serial. The controller side never reads this, but Windows uses
-# it for COM-port stickiness, so make it distinct on each device.
-# Change to "JANUS-W-0001" on the work Pico before deploying it there.
-supervisor.set_usb_serial_number("JANUS-P-0001")
+# CircuitPython generates a per-chip serial number automatically based on
+# the RP2350's hardware UID, so each Pico already presents a unique
+# serial to Windows without us needing to set one. Windows uses this
+# automatic value for COM port stickiness.
 
 
 # -----------------------------------------------------------------------
