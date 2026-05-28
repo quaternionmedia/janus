@@ -1,17 +1,37 @@
-.dev
-dev.*
-*/bin
-*/obj
+# ---- OS clutter ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# ---- Editor / IDE state --------------------------------------------------
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln.docstates
+*.swp
+
+# ---- C# / .NET build artifacts ------------------------------------------
+**/bin/
+**/obj/
+*.pdb
+
+# ---- Python / CircuitPython ---------------------------------------------
+**/__pycache__/
+*.pyc
+
+# uv / pip virtual environment
+.venv/
+
+# ---- Misc runtime artifacts ---------------------------------------------
 *.log
 *.tmp
 *.cache
-*.user
-*.pyc
-*.swp
-*.sln.docstates
-*.vs
-*.vscode
-*.DS_Store
-*.suo
-*.pdb
-*.key
+
+# ---- Personal scratch / overrides ---------------------------------------
+# Anything starting with `.dev` or `dev.` is treated as local-only,
+# never committed. Use this for in-progress experiments and per-machine
+# overrides.
+.dev
+.dev/
+dev.*
