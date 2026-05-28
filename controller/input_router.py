@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import queue
 import select
@@ -7,17 +8,165 @@ import sys
 import termios
 import threading
 import time
+from pathlib import Path
 
 import serial
+import yaml
 from evdev import InputDevice, ecodes
 
 
-# Per-event debug logs. Leave False for normal operation; flip to True to
-# trace MOUSE MOVE deltas and CURSOR SYNC updates line by line when
-# diagnosing switching or movement problems.
-VERBOSE = False
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+#
+# Settings come from config.yaml next to this script. Missing fields fall
+# back to the defaults below (which match the historical hardcoded values).
+# CLI flags can override individual fields at startup.
+
+DEFAULT_CONFIG = {
+    "devices": {
+        "mouse": "/dev/input/event5",
+        "keyboard": "/dev/input/event5",
+        "personal_uart": "/dev/ttyAMA0",
+        "work_uart": "/dev/ttyAMA2",
+    },
+    "serial": {
+        "baud": 921600,
+    },
+    "switching": {
+        "edge_arm_pixels": 2,
+        "switch_push_pixels": 12,
+        "switch_entry_margin_y": 32,
+        "switch_cooldown_seconds": 0.15,
+        "target_announce_interval_seconds": 2.0,
+    },
+    "commands": {
+        "personal": "p",
+        "work": "w",
+        "clipboard": "c",
+        "quit": "q",
+    },
+    "logging": {
+        "verbose": False,
+    },
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge `override` into `base`, returning a new dict."""
+    result = dict(base)
+    for key, value in override.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_config() -> dict:
+    """Load config.yaml from this script's directory, layered over defaults.
+
+    A missing file or missing fields fall through to DEFAULT_CONFIG, so
+    the controller still starts with sensible behavior even on a fresh
+    deployment.
+    """
+    config_path = Path(__file__).parent / "config.yaml"
+    if not config_path.exists():
+        print(f"config.yaml not found at {config_path}; using defaults.")
+        return DEFAULT_CONFIG
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+        return _deep_merge(DEFAULT_CONFIG, loaded)
+    except Exception as ex:
+        print(f"Failed to load config.yaml: {ex}. Using defaults.")
+        return DEFAULT_CONFIG
+
+
+def validate_command_keys(commands: dict) -> None:
+    """Sanity-check the command keys before the main loop accepts them.
+
+    Each command must be exactly one character. All four must be unique.
+    Raises ValueError with a clear message if either rule is violated.
+    """
+    required = ("personal", "work", "clipboard", "quit")
+    keys = {}
+    for name in required:
+        value = commands.get(name)
+        if not isinstance(value, str) or len(value) != 1:
+            raise ValueError(
+                f"commands.{name} must be a single character (got: {value!r})"
+            )
+        keys[name] = value.lower()
+
+    if len(set(keys.values())) != len(keys):
+        raise ValueError(
+            f"command keys must be unique; got: {keys}"
+        )
+
+
+def parse_args(config: dict) -> dict:
+    """Parse CLI overrides on top of an already-loaded config."""
+    parser = argparse.ArgumentParser(
+        description="Janus controller (mouse/keyboard router)."
+    )
+    parser.add_argument("--mouse", help="Path to the mouse evdev device.")
+    parser.add_argument("--keyboard", help="Path to the keyboard evdev device.")
+    parser.add_argument(
+        "--personal-uart", help="UART path to the Personal bridge."
+    )
+    parser.add_argument(
+        "--work-uart", help="UART path to the Work bridge."
+    )
+    parser.add_argument(
+        "--baud", type=int, help="UART baud rate (must match agents)."
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=None,
+        help="Enable verbose per-event logging.",
+    )
+
+    args = parser.parse_args()
+
+    # Apply overrides only where the CLI supplied a value. Copy nested
+    # dicts before mutating so we don't tamper with the loaded config or
+    # the DEFAULT_CONFIG constant.
+    result = dict(config)
+    result["devices"] = dict(result["devices"])
+    if args.mouse is not None:
+        result["devices"]["mouse"] = args.mouse
+    if args.keyboard is not None:
+        result["devices"]["keyboard"] = args.keyboard
+    if args.personal_uart is not None:
+        result["devices"]["personal_uart"] = args.personal_uart
+    if args.work_uart is not None:
+        result["devices"]["work_uart"] = args.work_uart
+
+    if args.baud is not None:
+        result["serial"] = dict(result["serial"])
+        result["serial"]["baud"] = args.baud
+
+    if args.verbose is not None:
+        result["logging"] = dict(result["logging"])
+        result["logging"]["verbose"] = args.verbose
+
+    return result
+
 
 running = True
+
+# Module-level verbose flag. Populated from config["logging"]["verbose"]
+# during main() before anything else reads it. Module-level so the
+# non-main helper functions (handle_cursor_line, etc.) can reference it
+# without having to thread `verbose` through every signature.
+_verbose = False
 
 
 def handle_signal(signum, frame):
@@ -291,12 +440,12 @@ def handle_cursor_line(
     if device_id == "P":
         personal_cursor["X"] = x
         personal_cursor["Y"] = y
-        if VERBOSE:
+        if _verbose:
             print(f"CURSOR SYNC P X={x} Y={y}")
     elif device_id == "W":
         work_cursor["X"] = x
         work_cursor["Y"] = y
-        if VERBOSE:
+        if _verbose:
             print(f"CURSOR SYNC W X={x} Y={y}")
 
     return True
@@ -356,19 +505,33 @@ def send_cursor_set(ser: serial.Serial, x: int, y: int) -> None:
 def main() -> int:
     global running
 
-    if len(sys.argv) != 5:
-        print(
-            "Usage: python3 input_router.py "
-            "/dev/input/mouse_eventX /dev/input/keyboard_eventY "
-            "/dev/ttyAMA_PERSONAL /dev/ttyAMA_WORK",
-            file=sys.stderr,
-        )
+    # Load config; CLI args (--mouse, --personal-uart, --verbose, etc.)
+    # override individual fields. With no flags and no config.yaml,
+    # everything falls back to DEFAULT_CONFIG above.
+    config = load_config()
+    try:
+        config = parse_args(config)
+        validate_command_keys(config["commands"])
+    except ValueError as ex:
+        print(f"Config error: {ex}", file=sys.stderr)
         return 1
 
-    mouse_path = sys.argv[1]
-    keyboard_path = sys.argv[2]
-    personal_uart_path = sys.argv[3]
-    work_uart_path = sys.argv[4]
+    mouse_path = config["devices"]["mouse"]
+    keyboard_path = config["devices"]["keyboard"]
+    personal_uart_path = config["devices"]["personal_uart"]
+    work_uart_path = config["devices"]["work_uart"]
+
+    # Capture the verbose flag for use throughout the controller. We
+    # promote it to a module-level variable so helper functions outside
+    # main() (e.g., handle_cursor_line) can read it without taking it as
+    # a parameter everywhere.
+    global _verbose
+    _verbose = bool(config["logging"]["verbose"])
+
+    cmd_personal = config["commands"]["personal"].lower()
+    cmd_work = config["commands"]["work"].lower()
+    cmd_clipboard = config["commands"]["clipboard"].lower()
+    cmd_quit = config["commands"]["quit"].lower()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -449,21 +612,18 @@ def main() -> int:
     w_to_p_push = 0
     auto_switch_enabled = True
 
-    EDGE_ARM_PIXELS = 2
-    SWITCH_PUSH_PIXELS = 12
-    SWITCH_ENTRY_MARGIN_Y = 32
-    # Brief window after any switch during which edge-arming is suppressed,
-    # so a reversal of mouse direction immediately after landing can't
-    # ping-pong the cursor back to the previous side.
-    SWITCH_COOLDOWN_SECONDS = 0.15
-    last_switch_time = 0.0
+    # Switching parameters come from config.yaml (switching: section).
+    # See controller/config.yaml for what each one does and recommended
+    # bounds.
+    EDGE_ARM_PIXELS = config["switching"]["edge_arm_pixels"]
+    SWITCH_PUSH_PIXELS = config["switching"]["switch_push_pixels"]
+    SWITCH_ENTRY_MARGIN_Y = config["switching"]["switch_entry_margin_y"]
+    SWITCH_COOLDOWN_SECONDS = config["switching"]["switch_cooldown_seconds"]
+    TARGET_ANNOUNCE_INTERVAL_SECONDS = config["switching"][
+        "target_announce_interval_seconds"
+    ]
 
-    # Periodically broadcast the current TARGET to both agents. This lets a
-    # late-joining agent (started after the router, or after a crash/restart)
-    # learn its active/inactive state within a bounded time without any
-    # explicit handshake. Agents that already know their state just see a
-    # same-value TARGET line and ignore it.
-    TARGET_ANNOUNCE_INTERVAL_SECONDS = 2.0
+    last_switch_time = 0.0
     last_target_announce_time = 0.0
 
     mouse_dx = 0
@@ -533,7 +693,7 @@ def main() -> int:
             if sys.stdin in ready:
                 command = sys.stdin.readline().strip().lower()
 
-                if command == "p":
+                if command == cmd_personal:
                     active_target = "P"
                     p_to_w_push = 0
                     w_to_p_push = 0
@@ -565,7 +725,7 @@ def main() -> int:
                     last_target_announce_time = last_switch_time
                     print("\n=== ACTIVE: PERSONAL ===\n")
 
-                elif command == "w":
+                elif command == cmd_work:
                     active_target = "W"
                     p_to_w_push = 0
                     w_to_p_push = 0
@@ -597,12 +757,12 @@ def main() -> int:
                     last_target_announce_time = last_switch_time
                     print("\n=== ACTIVE: WORK ===\n")
 
-                elif command == "c":
+                elif command == cmd_clipboard:
                     target_serial = personal_serial if active_target == "P" else work_serial
                     write_line(target_serial, "CLIPBOARD REQUEST")
                     print(f"clipboard request sent to: {active_target}")
 
-                elif command == "q":
+                elif command == cmd_quit:
                     running = False
                     continue
 
@@ -656,12 +816,12 @@ def main() -> int:
                             if event.value == 1:
                                 if not left_button_down:
                                     left_button_down = True
-                                    if VERBOSE: print("MOUSE BUTTON LEFT=DOWN")
+                                    if _verbose: print("MOUSE BUTTON LEFT=DOWN")
                                     write_line(target_serial, "MOUSE BUTTON LEFT=DOWN")
                             elif event.value == 0:
                                 if left_button_down:
                                     left_button_down = False
-                                    if VERBOSE: print("MOUSE BUTTON LEFT=UP")
+                                    if _verbose: print("MOUSE BUTTON LEFT=UP")
                                     write_line(target_serial, "MOUSE BUTTON LEFT=UP")
                             elif event.value == 2:
                                 pass
@@ -670,12 +830,12 @@ def main() -> int:
                             if event.value == 1:
                                 if not right_button_down:
                                     right_button_down = True
-                                    if VERBOSE: print("MOUSE BUTTON RIGHT=DOWN")
+                                    if _verbose: print("MOUSE BUTTON RIGHT=DOWN")
                                     write_line(target_serial, "MOUSE BUTTON RIGHT=DOWN")
                             elif event.value == 0:
                                 if right_button_down:
                                     right_button_down = False
-                                    if VERBOSE: print("MOUSE BUTTON RIGHT=UP")
+                                    if _verbose: print("MOUSE BUTTON RIGHT=UP")
                                     write_line(target_serial, "MOUSE BUTTON RIGHT=UP")
                             elif event.value == 2:
                                 pass
@@ -684,12 +844,12 @@ def main() -> int:
                             if event.value == 1:
                                 if not middle_button_down:
                                     middle_button_down = True
-                                    if VERBOSE: print("MOUSE BUTTON MIDDLE=DOWN")
+                                    if _verbose: print("MOUSE BUTTON MIDDLE=DOWN")
                                     write_line(target_serial, "MOUSE BUTTON MIDDLE=DOWN")
                             elif event.value == 0:
                                 if middle_button_down:
                                     middle_button_down = False
-                                    if VERBOSE: print("MOUSE BUTTON MIDDLE=UP")
+                                    if _verbose: print("MOUSE BUTTON MIDDLE=UP")
                                     write_line(target_serial, "MOUSE BUTTON MIDDLE=UP")
                             elif event.value == 2:
                                 pass
@@ -877,7 +1037,7 @@ def main() -> int:
                                     continue
 
                             target_serial = personal_serial if active_target == "P" else work_serial
-                            if VERBOSE:
+                            if _verbose:
                                 print(f"MOUSE MOVE target={active_target} dx={mouse_dx} dy={mouse_dy}")
                             write_line(target_serial, f"MOUSE MOVE DX={mouse_dx} DY={mouse_dy}")
 

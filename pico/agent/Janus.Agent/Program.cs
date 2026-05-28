@@ -3,51 +3,53 @@ using System.IO.Ports;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 internal static class Program
 {
-    private const int MouseEventFMove = 0x0001;
-    private const int MouseEventFLeftDown = 0x0002;
-    private const int MouseEventFLeftUp = 0x0004;
-    private const int MouseEventFRightDown = 0x0008;
-    private const int MouseEventFRightUp = 0x0010;
-    private const int MouseEventFMiddleDown = 0x0020;
-    private const int MouseEventFMiddleUp = 0x0040;
-    private const int MouseEventFWheel = 0x0800;
-    private const int MouseEventFHwheel = 0x1000;
+    // ---- Configuration --------------------------------------------------
+    //
+    // All tuning values come from appsettings.json at startup. Defaults
+    // below match the historical hardcoded values, so a missing config
+    // file or omitted field falls back to the same behavior as before.
+    // See appsettings.json for the schema.
 
-    private const uint KeyeventfExtendedkey = 0x0001;
-    private const uint KeyeventfKeyup = 0x0002;
+    // Serial port settings
+    private static int _serialBaud = 921600;
+    private static int _serialReadTimeoutMs = 5000;
+    private static int _serialWriteTimeoutMs = 5000;
+    private static int _serialReadBufferSize = 1024 * 1024;
+    private static int _serialWriteBufferSize = 1024 * 1024;
 
-    // Clipboard size tiers, all in raw UTF-8 bytes (before base64):
-    //   0 .. ClipboardAutoSyncBytes        -> auto-sync on change
-    //   ClipboardAutoSyncBytes .. ClipboardMaxBytes
-    //                                      -> only sync on manual request
-    //                                         ('c' in router, or user action)
-    //   > ClipboardMaxBytes                -> refuse; clear destination so
-    //                                         stale content doesn't paste
-    private const int ClipboardAutoSyncBytes = 16 * 1024;
-    private const int ClipboardMaxBytes = 256 * 1024;
+    // Clipboard policy
+    private static int _clipboardAutoSyncBytes = 16 * 1024;
+    private static int _clipboardMaxBytes = 256 * 1024;
+    private static ClipboardOutboundMode _clipboardOutboundMode = ClipboardOutboundMode.Auto;
 
-    // Serial buffers. Sized to comfortably hold a full max-size clipboard
-    // line (256 KB raw -> ~341 KB base64 -> ~341 KB on the wire) plus
-    // room for pipelined input events. At 921600 baud a 341 KB line
-    // takes ~3.7 seconds to transmit; the buffer has to absorb the whole
-    // thing because the reader may not drain it until the line completes.
-    private const int SerialReadBufferSize = 1024 * 1024;
-    private const int SerialWriteBufferSize = 1024 * 1024;
+    // Main loop timing
+    private static int _loopMainTickMs = 50;
+    private static int _loopReconnectDelayMs = 1000;
+    private static int _loopCursorSendIntervalMs = 100;
+    private static int _loopCursorKeepaliveSeconds = 2;
+    private static int _loopDisplayRefreshSeconds = 10;
 
-    // Raised read timeout so a large inbound clipboard line can finish
-    // arriving without ReadLine bailing out. ReceiveLoop treats timeouts as
-    // normal and just retries, but a tighter timeout causes unnecessary
-    // churn in the middle of a legitimate big transfer.
-    private const int SerialReadTimeoutMs = 5000;
+    // Manual clipboard-push triggers. Lets the user push this PC's
+    // clipboard to the peer without going to the controller terminal.
+    // All three triggers (console key, global hotkey, future tray) call
+    // the same PushClipboardToPeer() action.
+    private static string _pushConsoleKey = "c";          // key in the agent's own console
+    private static bool _pushHotkeyEnabled = false;        // global hotkey, off by default
+    private static bool _pushHotkeyCtrl = true;
+    private static bool _pushHotkeyShift = true;
+    private static bool _pushHotkeyAlt = false;
+    private static string _pushHotkeyKey = "C";            // single character A-Z / 0-9
+
+    // ---- Runtime state --------------------------------------------------
 
     private static volatile bool _isActiveTarget;
     private static DateTime _lastCursorSentUtc = DateTime.MinValue;
     private static int _lastCursorX = int.MinValue;
     private static int _lastCursorY = int.MinValue;
-    private static volatile bool _inputEnabled = true;
     private static string? _lastDisplayMessage;
     private static DateTime _lastDisplaySentUtc = DateTime.MinValue;
     private static bool _displaySentForCurrentConnection;
@@ -63,100 +65,18 @@ internal static class Program
     private static ClipboardWindow? _clipboardWindow;
     private static Thread? _clipboardThread;
 
-    private static readonly Dictionary<string, ushort> VirtualKeys = new(StringComparer.Ordinal)
-    {
-        ["KEY_A"] = 0x41,
-        ["KEY_B"] = 0x42,
-        ["KEY_C"] = 0x43,
-        ["KEY_D"] = 0x44,
-        ["KEY_E"] = 0x45,
-        ["KEY_F"] = 0x46,
-        ["KEY_G"] = 0x47,
-        ["KEY_H"] = 0x48,
-        ["KEY_I"] = 0x49,
-        ["KEY_J"] = 0x4A,
-        ["KEY_K"] = 0x4B,
-        ["KEY_L"] = 0x4C,
-        ["KEY_M"] = 0x4D,
-        ["KEY_N"] = 0x4E,
-        ["KEY_O"] = 0x4F,
-        ["KEY_P"] = 0x50,
-        ["KEY_Q"] = 0x51,
-        ["KEY_R"] = 0x52,
-        ["KEY_S"] = 0x53,
-        ["KEY_T"] = 0x54,
-        ["KEY_U"] = 0x55,
-        ["KEY_V"] = 0x56,
-        ["KEY_W"] = 0x57,
-        ["KEY_X"] = 0x58,
-        ["KEY_Y"] = 0x59,
-        ["KEY_Z"] = 0x5A,
-
-        ["KEY_0"] = 0x30,
-        ["KEY_1"] = 0x31,
-        ["KEY_2"] = 0x32,
-        ["KEY_3"] = 0x33,
-        ["KEY_4"] = 0x34,
-        ["KEY_5"] = 0x35,
-        ["KEY_6"] = 0x36,
-        ["KEY_7"] = 0x37,
-        ["KEY_8"] = 0x38,
-        ["KEY_9"] = 0x39,
-
-        ["KEY_SPACE"] = 0x20,
-        ["KEY_ENTER"] = 0x0D,
-        ["KEY_ESC"] = 0x1B,
-        ["KEY_TAB"] = 0x09,
-        ["KEY_BACKSPACE"] = 0x08,
-
-        ["KEY_LEFTSHIFT"] = 0xA0,
-        ["KEY_RIGHTSHIFT"] = 0xA1,
-        ["KEY_LEFTCTRL"] = 0xA2,
-        ["KEY_RIGHTCTRL"] = 0xA3,
-        ["KEY_LEFTALT"] = 0xA4,
-        ["KEY_RIGHTALT"] = 0xA5,
-        ["KEY_LEFTMETA"] = 0x5B,
-        ["KEY_RIGHTMETA"] = 0x5C,
-
-        ["KEY_UP"] = 0x26,
-        ["KEY_DOWN"] = 0x28,
-        ["KEY_LEFT"] = 0x25,
-        ["KEY_RIGHT"] = 0x27,
-
-        ["KEY_INSERT"] = 0x2D,
-        ["KEY_DELETE"] = 0x2E,
-        ["KEY_HOME"] = 0x24,
-        ["KEY_END"] = 0x23,
-        ["KEY_PAGEUP"] = 0x21,
-        ["KEY_PAGEDOWN"] = 0x22,
-
-        ["KEY_CAPSLOCK"] = 0x14,
-
-        ["KEY_F1"] = 0x70,
-        ["KEY_F2"] = 0x71,
-        ["KEY_F3"] = 0x72,
-        ["KEY_F4"] = 0x73,
-        ["KEY_F5"] = 0x74,
-        ["KEY_F6"] = 0x75,
-        ["KEY_F7"] = 0x76,
-        ["KEY_F8"] = 0x77,
-        ["KEY_F9"] = 0x78,
-        ["KEY_F10"] = 0x79,
-        ["KEY_F11"] = 0x7A,
-        ["KEY_F12"] = 0x7B,
-
-        ["KEY_MINUS"] = 0xBD,
-        ["KEY_EQUAL"] = 0xBB,
-        ["KEY_LEFTBRACE"] = 0xDB,
-        ["KEY_RIGHTBRACE"] = 0xDD,
-        ["KEY_BACKSLASH"] = 0xDC,
-        ["KEY_SEMICOLON"] = 0xBA,
-        ["KEY_APOSTROPHE"] = 0xDE,
-        ["KEY_GRAVE"] = 0xC0,
-        ["KEY_COMMA"] = 0xBC,
-        ["KEY_DOT"] = 0xBE,
-        ["KEY_SLASH"] = 0xBF,
-    };
+    // ---- NOTE on input injection ----------------------------------------
+    //
+    // As of stage 4, the Pico injects HID reports directly. The agent no
+    // longer handles MOUSE MOVE / MOUSE BUTTON / MOUSE WHEEL / KEY messages
+    // -- those are intercepted on the Pico and never reach this process.
+    // Only CURSOR SET, CLIPBOARD *, and TARGET arrive here.
+    //
+    // CURSOR SET stays in the agent because HID is relative-only: there's
+    // no way to say "go to absolute (x, y)" via a standard HID mouse.
+    // SetCursorPos is a Win32 call that does exactly this. Required at
+    // switch time to land the cursor at the right entry point.
+    // ---------------------------------------------------------------------
 
     private static async Task Main(string[] args)
     {
@@ -175,6 +95,8 @@ internal static class Program
             return;
         }
 
+        LoadConfig();
+
         using CancellationTokenSource cts = new();
 
         Console.CancelKeyPress += (_, e) =>
@@ -184,13 +106,14 @@ internal static class Program
         };
 
         Console.WriteLine($"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
-        Console.WriteLine("Press 'e' to toggle injected input on/off.");
         Console.WriteLine($"port: {portName}");
+        Console.WriteLine($"clipboard outbound mode: {_clipboardOutboundMode}");
+        Console.WriteLine($"push: console key '{_pushConsoleKey}'"
+            + (_pushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
         Console.WriteLine();
 
-        Task inputToggleTask = Task.Run(() => InputToggleLoop(cts.Token), cts.Token);
-
         StartClipboardMonitor();
+        StartConsoleKeyReader(cts.Token);
 
         try
         {
@@ -200,7 +123,7 @@ internal static class Program
 
                 if (port is null)
                 {
-                    await Task.Delay(1000, cts.Token);
+                    await Task.Delay(_loopReconnectDelayMs, cts.Token);
                     continue;
                 }
 
@@ -229,7 +152,7 @@ internal static class Program
                     {
                         SendDisplayIfChanged(port, deviceId);
                         SendCursorIfNeeded(port, deviceId);
-                        await Task.Delay(50, cts.Token);
+                        await Task.Delay(_loopMainTickMs, cts.Token);
                     }
                 }
                 catch (OperationCanceledException)
@@ -271,7 +194,7 @@ internal static class Program
                 if (!cts.Token.IsCancellationRequested)
                 {
                     Console.WriteLine($"Serial disconnected. Retrying: {portName}");
-                    await Task.Delay(1000, cts.Token);
+                    await Task.Delay(_loopReconnectDelayMs, cts.Token);
                 }
             }
         }
@@ -281,33 +204,169 @@ internal static class Program
         finally
         {
             Console.WriteLine("Stopping agent.");
-
             StopClipboardMonitor();
-
-            try
-            {
-                await inputToggleTask;
-            }
-            catch
-            {
-            }
         }
     }
+
+    // ---- Configuration loading ------------------------------------------
+
+    private static void LoadConfig()
+    {
+        string configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+
+        if (!File.Exists(configPath))
+        {
+            Console.WriteLine($"appsettings.json not found at {configPath}; using defaults.");
+            return;
+        }
+
+        try
+        {
+            string json = File.ReadAllText(configPath);
+            AgentConfig? cfg = JsonSerializer.Deserialize<AgentConfig>(
+                json,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                });
+
+            if (cfg is null)
+            {
+                Console.WriteLine("appsettings.json parsed as empty; using defaults.");
+                return;
+            }
+
+            ApplySerialConfig(cfg.Serial);
+            ApplyClipboardConfig(cfg.Clipboard);
+            ApplyLoopConfig(cfg.Loop);
+            ApplyPushConfig(cfg.Push);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load appsettings.json: {ex.Message}. Using defaults.");
+        }
+    }
+
+    private static void ApplySerialConfig(SerialSection? section)
+    {
+        if (section is null) return;
+        if (section.Baud > 0) _serialBaud = section.Baud;
+        if (section.ReadTimeoutMs > 0) _serialReadTimeoutMs = section.ReadTimeoutMs;
+        if (section.WriteTimeoutMs > 0) _serialWriteTimeoutMs = section.WriteTimeoutMs;
+        if (section.ReadBufferSize > 0) _serialReadBufferSize = section.ReadBufferSize;
+        if (section.WriteBufferSize > 0) _serialWriteBufferSize = section.WriteBufferSize;
+    }
+
+    private static void ApplyClipboardConfig(ClipboardSection? section)
+    {
+        if (section is null) return;
+        if (section.AutoSyncBytes > 0) _clipboardAutoSyncBytes = section.AutoSyncBytes;
+        if (section.MaxBytes > 0) _clipboardMaxBytes = section.MaxBytes;
+
+        if (!string.IsNullOrWhiteSpace(section.OutboundMode))
+        {
+            _clipboardOutboundMode = section.OutboundMode.Trim().ToLowerInvariant() switch
+            {
+                "manual" => ClipboardOutboundMode.Manual,
+                "auto" => ClipboardOutboundMode.Auto,
+                _ => ClipboardOutboundMode.Auto,
+            };
+        }
+    }
+
+    private static void ApplyLoopConfig(LoopSection? section)
+    {
+        if (section is null) return;
+        if (section.MainTickMs > 0) _loopMainTickMs = section.MainTickMs;
+        if (section.ReconnectDelayMs > 0) _loopReconnectDelayMs = section.ReconnectDelayMs;
+        if (section.CursorSendIntervalMs > 0) _loopCursorSendIntervalMs = section.CursorSendIntervalMs;
+        if (section.CursorKeepaliveSeconds > 0) _loopCursorKeepaliveSeconds = section.CursorKeepaliveSeconds;
+        if (section.DisplayRefreshSeconds > 0) _loopDisplayRefreshSeconds = section.DisplayRefreshSeconds;
+    }
+
+    private static void ApplyPushConfig(PushSection? section)
+    {
+        if (section is null) return;
+        if (!string.IsNullOrWhiteSpace(section.ConsoleKey))
+        {
+            _pushConsoleKey = section.ConsoleKey.Trim().ToLowerInvariant();
+        }
+        _pushHotkeyEnabled = section.HotkeyEnabled;
+        _pushHotkeyCtrl = section.HotkeyCtrl;
+        _pushHotkeyShift = section.HotkeyShift;
+        _pushHotkeyAlt = section.HotkeyAlt;
+        if (!string.IsNullOrWhiteSpace(section.HotkeyKey))
+        {
+            _pushHotkeyKey = section.HotkeyKey.Trim().ToUpperInvariant();
+        }
+    }
+
+    private enum ClipboardOutboundMode
+    {
+        Auto,
+        Manual,
+    }
+
+    private sealed class AgentConfig
+    {
+        public SerialSection? Serial { get; set; }
+        public ClipboardSection? Clipboard { get; set; }
+        public LoopSection? Loop { get; set; }
+        public PushSection? Push { get; set; }
+    }
+
+    private sealed class SerialSection
+    {
+        public int Baud { get; set; }
+        public int ReadTimeoutMs { get; set; }
+        public int WriteTimeoutMs { get; set; }
+        public int ReadBufferSize { get; set; }
+        public int WriteBufferSize { get; set; }
+    }
+
+    private sealed class ClipboardSection
+    {
+        public string? OutboundMode { get; set; }
+        public int AutoSyncBytes { get; set; }
+        public int MaxBytes { get; set; }
+    }
+
+    private sealed class LoopSection
+    {
+        public int MainTickMs { get; set; }
+        public int ReconnectDelayMs { get; set; }
+        public int CursorSendIntervalMs { get; set; }
+        public int CursorKeepaliveSeconds { get; set; }
+        public int DisplayRefreshSeconds { get; set; }
+    }
+
+    private sealed class PushSection
+    {
+        public string? ConsoleKey { get; set; }
+        public bool HotkeyEnabled { get; set; }
+        public bool HotkeyCtrl { get; set; }
+        public bool HotkeyShift { get; set; }
+        public bool HotkeyAlt { get; set; }
+        public string? HotkeyKey { get; set; }
+    }
+
+    // ---- Serial port ----------------------------------------------------
 
     private static SerialPort? TryOpenPort(string portName)
     {
         SerialPort? port = null;
         try
         {
-            port = new(portName, 921600)
+            port = new(portName, _serialBaud)
             {
                 NewLine = "\n",
-                ReadTimeout = SerialReadTimeoutMs,
-                WriteTimeout = 5000,
+                ReadTimeout = _serialReadTimeoutMs,
+                WriteTimeout = _serialWriteTimeoutMs,
                 DtrEnable = true,
                 RtsEnable = true,
-                ReadBufferSize = SerialReadBufferSize,
-                WriteBufferSize = SerialWriteBufferSize,
+                ReadBufferSize = _serialReadBufferSize,
+                WriteBufferSize = _serialWriteBufferSize,
             };
             port.Open();
             return port;
@@ -317,26 +376,6 @@ internal static class Program
             Console.WriteLine($"Open failed for {portName}: {ex.Message}");
             port?.Dispose();
             return null;
-        }
-    }
-
-    private static void InputToggleLoop(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            if (!Console.KeyAvailable)
-            {
-                Thread.Sleep(50);
-                continue;
-            }
-
-            ConsoleKeyInfo key = Console.ReadKey(true);
-
-            if (key.Key == ConsoleKey.E)
-            {
-                _inputEnabled = !_inputEnabled;
-                Console.WriteLine($"Injected input enabled: {_inputEnabled}");
-            }
         }
     }
 
@@ -389,7 +428,7 @@ internal static class Program
         string displayMessage = $"DISPLAY {deviceId} L={left} T={top} W={width} H={height}";
         bool changed = _lastDisplayMessage != displayMessage;
 
-        bool refreshDue = DateTime.UtcNow - _lastDisplaySentUtc >= TimeSpan.FromSeconds(10);
+        bool refreshDue = DateTime.UtcNow - _lastDisplaySentUtc >= TimeSpan.FromSeconds(_loopDisplayRefreshSeconds);
 
         if (!changed && _displaySentForCurrentConnection && !refreshDue)
         {
@@ -410,7 +449,7 @@ internal static class Program
             return;
         }
 
-        if (DateTime.UtcNow - _lastCursorSentUtc < TimeSpan.FromMilliseconds(100))
+        if (DateTime.UtcNow - _lastCursorSentUtc < TimeSpan.FromMilliseconds(_loopCursorSendIntervalMs))
         {
             return;
         }
@@ -421,7 +460,7 @@ internal static class Program
         }
 
         bool changed = point.X != _lastCursorX || point.Y != _lastCursorY;
-        bool keepaliveDue = DateTime.UtcNow - _lastCursorSentUtc >= TimeSpan.FromSeconds(2);
+        bool keepaliveDue = DateTime.UtcNow - _lastCursorSentUtc >= TimeSpan.FromSeconds(_loopCursorKeepaliveSeconds);
 
         if (!changed && !keepaliveDue)
         {
@@ -480,56 +519,56 @@ internal static class Program
             return;
         }
 
-        if (!_inputEnabled)
-        {
-            return;
-        }
-
-        if (line.StartsWith("MOUSE MOVE ", StringComparison.Ordinal))
-        {
-            HandleMouseMove(line);
-            return;
-        }
-
-        if (line.StartsWith("MOUSE BUTTON ", StringComparison.Ordinal))
-        {
-            HandleMouseButton(line);
-            return;
-        }
-
-        if (line.StartsWith("MOUSE WHEEL ", StringComparison.Ordinal))
-        {
-            HandleMouseWheel(line);
-            return;
-        }
-
-        if (line.StartsWith("MOUSE HWHEEL ", StringComparison.Ordinal))
-        {
-            HandleMouseHWheel(line);
-            return;
-        }
-
         if (line.StartsWith("CURSOR SET ", StringComparison.Ordinal))
         {
             HandleCursorSet(line);
             return;
         }
 
-        if (line.StartsWith("KEY ", StringComparison.Ordinal))
+        // MOUSE MOVE / MOUSE BUTTON / MOUSE WHEEL / MOUSE HWHEEL / KEY
+        // are now consumed on the Pico and never reach the agent. If
+        // one ever shows up here it means the Pico's HID routing
+        // failed -- log it as a warning rather than silently ignoring.
+        if (line.StartsWith("MOUSE ", StringComparison.Ordinal)
+            || line.StartsWith("KEY ", StringComparison.Ordinal))
         {
-            HandleKey(line);
+            Console.WriteLine($"unexpected input message reached agent: {line}");
         }
+    }
+
+    // ---- Clipboard handlers ---------------------------------------------
+
+    // Single shared action for all manual push triggers (console key,
+    // global hotkey, future tray). Grabs the current active port and
+    // sends this PC's clipboard to the peer -- exactly what the
+    // controller's 'c' command does via CLIPBOARD REQUEST, but initiated
+    // locally. Safe to call from any thread; it snapshots the port first.
+    private static void PushClipboardToPeer(string source)
+    {
+        SerialPort? port = _activePort;
+        if (port is null || !port.IsOpen)
+        {
+            Console.WriteLine($"push ({source}) ignored: no serial connection.");
+            return;
+        }
+
+        Console.WriteLine($"push ({source}): sending clipboard to peer.");
+        HandleClipboardRequest(port);
     }
 
     private static void HandleClipboardRequest(SerialPort port)
     {
+        // Manual push triggered by the controller's 'c' command OR by a
+        // local trigger via PushClipboardToPeer(). Always honored
+        // regardless of outbound mode -- the user explicitly asked for
+        // this.
         string text = GetClipboardTextSafe();
         byte[] rawBytes = Encoding.UTF8.GetBytes(text);
 
-        if (rawBytes.Length > ClipboardMaxBytes)
+        if (rawBytes.Length > _clipboardMaxBytes)
         {
             Console.WriteLine(
-                $"clipboard refused (outbound): {rawBytes.Length} bytes exceeds {ClipboardMaxBytes} limit");
+                $"clipboard refused (outbound): {rawBytes.Length} bytes exceeds {_clipboardMaxBytes} limit");
             // Tell the other side to clear its clipboard so a stale value
             // doesn't silently paste.
             try
@@ -561,6 +600,11 @@ internal static class Program
 
     private static void HandleClipboardSet(string line)
     {
+        // Inbound clipboard from the peer is always accepted regardless of
+        // outbound policy. The policy controls what we BROADCAST, not what
+        // we ACCEPT. Asymmetric by design: Personal-side wants to receive
+        // from Work freely, but not leak its own clipboard to Work.
+
         // Pull only the TEXT= payload; length check before any base64
         // decode allocation.
         const string marker = " TEXT=";
@@ -583,7 +627,7 @@ internal static class Program
             return;
         }
 
-        if (rawBytes.Length > ClipboardMaxBytes)
+        if (rawBytes.Length > _clipboardMaxBytes)
         {
             // The other side violated the size contract (or the message
             // got corrupted). Clear local clipboard so nothing stale
@@ -618,104 +662,13 @@ internal static class Program
         UpdateSyncedClipboardHash(Array.Empty<byte>());
     }
 
-    private static void HandleMouseMove(string line)
-    {
-        int dx = 0;
-        int dy = 0;
-
-        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (string part in parts)
-        {
-            if (part.StartsWith("DX=", StringComparison.Ordinal))
-            {
-                if (!int.TryParse(part["DX=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out dx))
-                {
-                    Console.WriteLine($"MOUSE MOVE parse error: {line}");
-                    return;
-                }
-            }
-            else if (part.StartsWith("DY=", StringComparison.Ordinal))
-            {
-                if (!int.TryParse(part["DY=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out dy))
-                {
-                    Console.WriteLine($"MOUSE MOVE parse error: {line}");
-                    return;
-                }
-            }
-        }
-
-        //Console.WriteLine($"HANDLE MOUSE MOVE dx={dx} dy={dy}");
-        
-        mouse_event(MouseEventFMove, dx, dy, 0, UIntPtr.Zero);
-    }
-
-    private static void HandleMouseButton(string line)
-    {
-        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        if (parts.Length < 3)
-        {
-            return;
-        }
-
-        uint flags = parts[2] switch
-        {
-            "LEFT=DOWN" => MouseEventFLeftDown,
-            "LEFT=UP" => MouseEventFLeftUp,
-            "RIGHT=DOWN" => MouseEventFRightDown,
-            "RIGHT=UP" => MouseEventFRightUp,
-            "MIDDLE=DOWN" => MouseEventFMiddleDown,
-            "MIDDLE=UP" => MouseEventFMiddleUp,
-            _ => 0
-        };
-
-        if (flags != 0)
-        {
-            mouse_event(flags, 0, 0, 0, UIntPtr.Zero);
-        }
-    }
-
-    private static void HandleMouseWheel(string line)
-    {
-        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (string part in parts)
-        {
-            if (part.StartsWith("DELTA=", StringComparison.Ordinal))
-            {
-                if (!int.TryParse(part["DELTA=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int delta))
-                {
-                    Console.WriteLine($"MOUSE WHEEL parse error: {line}");
-                    return;
-                }
-                mouse_event(MouseEventFWheel, 0, 0, delta * 120, UIntPtr.Zero);
-                return;
-            }
-        }
-    }
-
-    private static void HandleMouseHWheel(string line)
-    {
-        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (string part in parts)
-        {
-            if (part.StartsWith("DELTA=", StringComparison.Ordinal))
-            {
-                if (!int.TryParse(part["DELTA=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int delta))
-                {
-                    Console.WriteLine($"MOUSE HWHEEL parse error: {line}");
-                    return;
-                }
-                mouse_event(MouseEventFHwheel, 0, 0, delta * 120, UIntPtr.Zero);
-                return;
-            }
-        }
-    }
-
     private static void HandleCursorSet(string line)
     {
+        // "CURSOR SET X=1234 Y=567"
+        // Kept on the agent (not handed off to Pico HID) because HID
+        // mouse reports are relative-only -- there's no standard way to
+        // request absolute cursor positioning. SetCursorPos is the Win32
+        // primitive that does this directly.
         string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
         int? x = null;
@@ -749,67 +702,6 @@ internal static class Program
         }
 
         SetCursorPos(x.Value, y.Value);
-    }
-
-    private static void HandleKey(string line)
-    {
-        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        string? keyName = null;
-        string? state = null;
-
-        foreach (string part in parts)
-        {
-            if (part.StartsWith("NAME=", StringComparison.Ordinal))
-            {
-                keyName = part["NAME=".Length..];
-            }
-            else if (part.StartsWith("STATE=", StringComparison.Ordinal))
-            {
-                state = part["STATE=".Length..];
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(keyName) || string.IsNullOrWhiteSpace(state))
-        {
-            return;
-        }
-
-        if (!VirtualKeys.TryGetValue(keyName, out ushort vk))
-        {
-            return;
-        }
-
-        uint flags = 0;
-
-        if (IsExtendedKey(keyName))
-        {
-            flags |= KeyeventfExtendedkey;
-        }
-
-        if (state.Equals("UP", StringComparison.Ordinal))
-        {
-            flags |= KeyeventfKeyup;
-        }
-
-        keybd_event((byte)vk, 0, flags, UIntPtr.Zero);
-    }
-
-    private static bool IsExtendedKey(string keyName)
-    {
-        return keyName is
-            "KEY_UP" or
-            "KEY_DOWN" or
-            "KEY_LEFT" or
-            "KEY_RIGHT" or
-            "KEY_INSERT" or
-            "KEY_DELETE" or
-            "KEY_HOME" or
-            "KEY_END" or
-            "KEY_PAGEUP" or
-            "KEY_PAGEDOWN" or
-            "KEY_RIGHTALT" or
-            "KEY_RIGHTCTRL";
     }
 
     private static string GetClipboardTextSafe()
@@ -912,13 +804,71 @@ internal static class Program
     //
     // Runs a dedicated STA thread that owns a hidden message-only window.
     // Windows posts WM_CLIPBOARDUPDATE to that window on every clipboard
-    // change. When one arrives, compare hash against the last synced
-    // value; if different, push the new clipboard to the active port.
+    // change. When one arrives, the OnClipboardChanged callback decides
+    // what to do based on the outbound policy:
+    //
+    //   Auto mode:   compare hash against the last synced value; if
+    //                different, push the new clipboard to the active port.
+    //   Manual mode: log a hint that the user can manually push via 'c'
+    //                in the controller. Update the hash but do NOT send.
     //
     // The hash check is what keeps the two-agent loop from bouncing
-    // forever: incoming CLIPBOARD SET on agent A updates the hash before
-    // SetText fires, so A's own monitor callback sees hash-match and
-    // suppresses the re-broadcast.
+    // forever in Auto mode: incoming CLIPBOARD SET on agent A updates the
+    // hash before SetText fires, so A's own monitor callback sees
+    // hash-match and suppresses the re-broadcast.
+
+    // Background reader for the agent's own console. Watches stdin for the
+    // configured push key and fires a clipboard push when seen. Runs on a
+    // background thread so it doesn't block the main serial loop.
+    //
+    // Note on Ctrl+C: Console.CancelKeyPress (registered in Main) handles
+    // Ctrl+C independently of this reader. ReadKey here only sees ordinary
+    // keystrokes, so the two don't conflict. If stdin is redirected (no
+    // console, e.g. running under a service with no console), ReadKey
+    // throws InvalidOperationException -- we catch it and quietly stop the
+    // reader, since there's no interactive console to read from anyway.
+    private static void StartConsoleKeyReader(CancellationToken token)
+    {
+        Thread reader = new(() =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!Console.KeyAvailable)
+                    {
+                        Thread.Sleep(50);
+                        continue;
+                    }
+
+                    ConsoleKeyInfo info = Console.ReadKey(intercept: true);
+
+                    // Compare case-insensitively against the configured key.
+                    string pressed = info.KeyChar.ToString().ToLowerInvariant();
+                    if (pressed == _pushConsoleKey)
+                    {
+                        PushClipboardToPeer("console");
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // No interactive console (stdin redirected). Nothing to
+                    // read; stop the reader thread.
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"console reader error: {ex.Message}");
+                    Thread.Sleep(250);
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "ConsoleKeyReader",
+        };
+        reader.Start();
+    }
 
     private static void StartClipboardMonitor()
     {
@@ -926,7 +876,9 @@ internal static class Program
         {
             try
             {
-                _clipboardWindow = new ClipboardWindow(OnClipboardChanged);
+                _clipboardWindow = new ClipboardWindow(
+                    OnClipboardChanged,
+                    () => PushClipboardToPeer("hotkey"));
                 Application.Run(_clipboardWindow);
             }
             catch (Exception ex)
@@ -998,18 +950,46 @@ internal static class Program
 
         // Suppress if this clipboard change was caused by our own sync
         // (either our SetText from an inbound line, or a previous outbound
-        // we already broadcast).
+        // we already broadcast). Applies in both Auto and Manual modes.
         if (IsAlreadySynced(rawBytes))
         {
             return;
         }
 
-        if (rawBytes.Length > ClipboardMaxBytes)
+        // ---- MANUAL OUTBOUND MODE ---------------------------------------
+        //
+        // In Manual mode we never auto-broadcast. Every local clipboard
+        // change is announced to the console with a hint telling the user
+        // how to push it manually. The hash is updated so we don't
+        // re-announce the same content if the monitor fires again.
+        //
+        // Future extension point: this is where a tray notification or
+        // popup with a "send to peer" button would hook in. Today it's
+        // just a console message.
+        if (_clipboardOutboundMode == ClipboardOutboundMode.Manual)
+        {
+            if (rawBytes.Length > _clipboardMaxBytes)
+            {
+                Console.WriteLine(
+                    $"clipboard change ({rawBytes.Length} bytes) exceeds {_clipboardMaxBytes} hard limit; cannot be sent.");
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"clipboard change ({rawBytes.Length} bytes); press 'c' in controller to send to peer.");
+            }
+            UpdateSyncedClipboardHash(rawBytes);
+            return;
+        }
+
+        // ---- AUTO OUTBOUND MODE (original behavior) ---------------------
+
+        if (rawBytes.Length > _clipboardMaxBytes)
         {
             // Over hard ceiling: refuse and tell the other side to clear
             // its clipboard so a stale value doesn't paste silently.
             Console.WriteLine(
-                $"clipboard auto-sync refused: {rawBytes.Length} bytes exceeds {ClipboardMaxBytes} hard limit");
+                $"clipboard auto-sync refused: {rawBytes.Length} bytes exceeds {_clipboardMaxBytes} hard limit");
             try
             {
                 port.WriteLine("CLIPBOARD CLEAR");
@@ -1023,7 +1003,7 @@ internal static class Program
             return;
         }
 
-        if (rawBytes.Length > ClipboardAutoSyncBytes)
+        if (rawBytes.Length > _clipboardAutoSyncBytes)
         {
             // Between auto-sync and hard ceiling: don't broadcast. User
             // can trigger a manual 'c' in the router if they want this
@@ -1031,10 +1011,7 @@ internal static class Program
             // alone (they can still paste whatever was there before).
             Console.WriteLine(
                 $"clipboard change {rawBytes.Length} bytes exceeds auto-sync threshold "
-                + $"({ClipboardAutoSyncBytes}); use manual 'c' to propagate.");
-            // Record hash so subsequent identical monitor events don't log
-            // again. A genuinely new copy (different hash) will re-trigger
-            // this path and re-log.
+                + $"({_clipboardAutoSyncBytes}); use manual 'c' to propagate.");
             UpdateSyncedClipboardHash(rawBytes);
             return;
         }
@@ -1056,11 +1033,23 @@ internal static class Program
     private sealed class ClipboardWindow : Form
     {
         private const int WmClipboardupdate = 0x031D;
-        private readonly Action _onChange;
+        private const int WmHotkey = 0x0312;
+        private const int HotkeyId = 0xB001;   // arbitrary unique id for our hotkey
 
-        public ClipboardWindow(Action onChange)
+        // Windows modifier flags for RegisterHotKey.
+        private const uint ModAlt = 0x0001;
+        private const uint ModControl = 0x0002;
+        private const uint ModShift = 0x0004;
+        private const uint ModNorepeat = 0x4000;
+
+        private readonly Action _onChange;
+        private readonly Action? _onHotkey;
+        private bool _hotkeyRegistered;
+
+        public ClipboardWindow(Action onChange, Action? onHotkey)
         {
             _onChange = onChange;
+            _onHotkey = onHotkey;
 
             // Message-only, never shown, never in taskbar.
             ShowInTaskbar = false;
@@ -1072,6 +1061,48 @@ internal static class Program
             Load += (_, _) => Hide();
 
             AddClipboardFormatListener(Handle);
+            TryRegisterHotkey();
+        }
+
+        private void TryRegisterHotkey()
+        {
+            if (!_pushHotkeyEnabled || _onHotkey is null)
+            {
+                return;
+            }
+
+            uint mods = ModNorepeat;
+            if (_pushHotkeyCtrl) mods |= ModControl;
+            if (_pushHotkeyShift) mods |= ModShift;
+            if (_pushHotkeyAlt) mods |= ModAlt;
+
+            // Convert the configured key char to a virtual-key code. For
+            // A-Z and 0-9 the VK code equals the ASCII code of the
+            // uppercase character, which is what we stored in
+            // _pushHotkeyKey.
+            if (string.IsNullOrEmpty(_pushHotkeyKey))
+            {
+                Console.WriteLine("push hotkey enabled but no key configured; skipping.");
+                return;
+            }
+
+            uint vk = _pushHotkeyKey[0];
+
+            _hotkeyRegistered = RegisterHotKey(Handle, HotkeyId, mods, vk);
+            if (_hotkeyRegistered)
+            {
+                string combo =
+                    (_pushHotkeyCtrl ? "Ctrl+" : "")
+                    + (_pushHotkeyShift ? "Shift+" : "")
+                    + (_pushHotkeyAlt ? "Alt+" : "")
+                    + _pushHotkeyKey;
+                Console.WriteLine($"push hotkey registered: {combo}");
+            }
+            else
+            {
+                Console.WriteLine(
+                    "push hotkey registration failed (another app may own this combo).");
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -1087,6 +1118,17 @@ internal static class Program
                     Console.WriteLine($"Clipboard change handler error: {ex.Message}");
                 }
             }
+            else if (m.Msg == WmHotkey && m.WParam.ToInt32() == HotkeyId)
+            {
+                try
+                {
+                    _onHotkey?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Hotkey handler error: {ex.Message}");
+                }
+            }
             base.WndProc(ref m);
         }
 
@@ -1094,6 +1136,10 @@ internal static class Program
         {
             try
             {
+                if (_hotkeyRegistered)
+                {
+                    UnregisterHotKey(Handle, HotkeyId);
+                }
                 RemoveClipboardFormatListener(Handle);
             }
             catch
@@ -1102,6 +1148,12 @@ internal static class Program
             base.Dispose(disposing);
         }
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool AddClipboardFormatListener(IntPtr hwnd);
@@ -1122,12 +1174,6 @@ internal static class Program
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetCursorPos(int x, int y);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetCursorPos(out POINT lpPoint);

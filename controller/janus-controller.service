@@ -1,0 +1,48 @@
+# /etc/systemd/system/janus-controller.service
+#
+# Install on the Pi 5 controller:
+#     sudo cp janus-controller.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now janus-controller
+#
+# Check status:
+#     sudo systemctl status janus-controller
+#     sudo journalctl -u janus-controller -f     # live logs
+#
+# Stop / start / restart:
+#     sudo systemctl stop janus-controller
+#     sudo systemctl start janus-controller
+#     sudo systemctl restart janus-controller
+
+[Unit]
+Description=Janus controller (mouse/keyboard router)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/janus/controller
+Environment=PYTHONUNBUFFERED=1d
+
+# uv creates/updates the venv on the first start after any pyproject.toml
+# change, then invokes Python. No manual activation needed.
+ExecStart=/home/pi/.local/bin/uv run input_router.py
+
+# Restart policy: keep the controller running through transient failures.
+Restart=always
+RestartSec=2
+
+# The controller needs read access to /dev/input/eventN (via the `input`
+# group) and read/write access to /dev/ttyAMA0 / /dev/ttyAMA2 (via the
+# `dialout` group). Make sure the pi user is in both:
+#     sudo usermod -a -G input,dialout pi
+SupplementaryGroups=input dialout
+
+# Capture stdout/stderr to journald so journalctl -u janus-controller
+# shows the controller's output.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
