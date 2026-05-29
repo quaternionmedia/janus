@@ -23,7 +23,7 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/janus/controller
-Environment=PYTHONUNBUFFERED=1d
+Environment=PYTHONUNBUFFERED=1
 
 # uv creates/updates the venv on the first start after any pyproject.toml
 # change, then invokes Python. No manual activation needed.

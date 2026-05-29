@@ -1,28 +1,32 @@
 # Janus controller configuration.
 #
-# Loaded once at startup from controller/config.yaml. Restart the
-# controller to apply changes.
+# Loaded once at startup. Restart the controller to apply changes.
 #
 # Any value can be overridden at startup by a CLI flag of the same name:
-#     uv run input_router.py --mouse /dev/input/event7
+#     uv run input_router.py --mouse /dev/input/by-id/...
+
+# ---------------------------------------------------------------------------
+# Active device file
+# ---------------------------------------------------------------------------
 #
-# All fields are optional; omitted ones fall back to the defaults shown
-# below (which match the current hardcoded behavior).
+# Names a YAML file in controller/profiles/ whose `devices:` section
+# supplies all device paths (mouse, keyboard, personal_uart, work_uart).
+# Swap to a different hardware setup by changing this one line.
+#
+# If the named file is missing or unreadable, the controller logs a loud
+# warning and falls back to the hardcoded device paths in
+# input_router.py's DEFAULT_CONFIG (Logitech-K400-style defaults). It will
+# start, but it likely won't find your actual hardware -- check the log.
+#
+# Available device files (controller/profiles/):
+#   logitech_k400.yaml      Logitech K400 Plus wireless combo receiver
+#   razer_steelseries.yaml  Razer Basilisk V3 + SteelSeries Apex (current)
 
-devices:
-  # Linux input device(s) for the mouse and keyboard. The Logitech K400
-  # exposes both on a single evdev node, so we set both to the same path
-  # and the router detects "combined input device" mode automatically.
-  # If your receiver enumerates them separately, set them to distinct
-  # /dev/input/eventN paths.
-  mouse: /dev/input/event5
-  keyboard: /dev/input/event5
+device_config_file: "razer_steelseries.yaml"
 
-  # UARTs to the two bridges (Pi Zeros or Picos).
-  # Personal is on UART0 (GPIO 14/15). Work is on UART2 (GPIO 4/5, requires
-  # dtoverlay=uart2 in /boot/firmware/config.txt).
-  personal_uart: /dev/ttyAMA0
-  work_uart: /dev/ttyAMA2
+# ---------------------------------------------------------------------------
+# Non-device settings
+# ---------------------------------------------------------------------------
 
 serial:
   # UART line rate. Must match both bridges and both agents exactly.
@@ -33,8 +37,12 @@ switching:
   # accumulation can begin.
   edge_arm_pixels: 2
 
-  # Total pixels of sustained motion into the edge required before an
-  # auto-switch fires. Lower = snappier, higher = more deliberate.
+  # Total raw mouse_dy units required (accumulated while the cursor is in
+  # the arm zone, moving toward the edge) before an auto-switch fires.
+  # This value is DEVICE-SENSITIVE: a high-DPI gaming mouse generates many
+  # more units per inch of physical movement than a trackpad, so the same
+  # value feels much "easier" to trigger on a Razer than it did on a K400.
+  # If switching feels too eager (or too sluggish), this is the knob.
   switch_push_pixels: 12
 
   # Vertical offset from the destination's top/bottom edge at which the
@@ -47,8 +55,7 @@ switching:
   switch_cooldown_seconds: 0.15
 
   # How often the controller re-broadcasts the current active target.
-  # Late-joining agents pick up their active/inactive state within one
-  # interval without an explicit handshake.
+  # Late-joining agents pick up their state within one interval.
   target_announce_interval_seconds: 2.0
 
 commands:
@@ -57,7 +64,7 @@ commands:
   # All four must be distinct.
   personal: p
   work: w
-  clipboard: s
+  clipboard: c
   quit: q
 
 logging:

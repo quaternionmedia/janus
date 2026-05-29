@@ -1,0 +1,23 @@
+# Logitech K400 Plus device file.
+#
+# Snapshot of the original Janus device setup. The K400 is a wireless
+# combo receiver that exposes mouse and keyboard on the same evdev node,
+# so the same by-id path appears under both `mouse` and `keyboard`. The
+# controller dedupes -- the device is opened once -- and routes each
+# event by its type (REL/BTN -> mouse handler, KEY -> keyboard handler).
+#
+# Paths use /dev/input/by-id/ symlinks so they stay stable across reboots
+# and USB port changes. /dev/input/eventN numbers shift with enumeration
+# order and are NOT safe to hardcode here.
+
+devices:
+  mouse:
+    - /dev/input/by-id/usb-Logitech_USB_Receiver-if02-event-mouse
+  keyboard:
+    - /dev/input/by-id/usb-Logitech_USB_Receiver-if02-event-mouse
+
+  # UARTs to the two bridges (Picos). These are the same regardless of
+  # input hardware, but living in the device file keeps all "what to open"
+  # paths in one place.
+  personal_uart: /dev/ttyAMA0
+  work_uart: /dev/ttyAMA2

@@ -24,9 +24,30 @@ from evdev import InputDevice, ecodes
 # CLI flags can override individual fields at startup.
 
 DEFAULT_CONFIG = {
+    # Filename (in profiles/) of a YAML file whose `devices:` section
+    # supplies all device paths. If missing/unreadable, we fall back to
+    # the `devices:` block below with a loud warning. See config.yaml.
+    "device_config_file": None,
     "devices": {
-        "mouse": "/dev/input/event5",
-        "keyboard": "/dev/input/event5",
+        # mouse / keyboard are LISTS of paths. The controller opens every
+        # unique path once and dispatches each event by its TYPE: a fd's
+        # REL_*, BTN_LEFT/RIGHT/MIDDLE, and SYN events go through the mouse
+        # handler; its KEY_* (non-BTN) events go through the keyboard
+        # handler. There's no per-fd role flag -- the same fd can yield
+        # both kinds of events and they're routed by what they are, not by
+        # which list its path appeared in.
+        #
+        # Implications:
+        # * A combined device (e.g., Logitech K400 receiver, which reports
+        #   mouse + keyboard on one node) is configured by listing the
+        #   same path under both keys. The controller dedupes, opens it
+        #   once, and both event kinds flow correctly.
+        # * Listing additional interfaces (e.g., a Razer mouse's
+        #   "if02-event-kbd" node where Synapse-mapped buttons emit
+        #   keystrokes) under `keyboard` is how we capture programmable
+        #   side-buttons that come over a separate evdev node.
+        "mouse": ["/dev/input/event5"],
+        "keyboard": ["/dev/input/event5"],
         "personal_uart": "/dev/ttyAMA0",
         "work_uart": "/dev/ttyAMA2",
     },
@@ -88,6 +109,96 @@ def load_config() -> dict:
         return DEFAULT_CONFIG
 
 
+def load_device_config_file(config: dict) -> dict:
+    """Apply the active device file's `devices:` section on top of config.
+
+    Reads the filename from config["device_config_file"], opens
+    profiles/<filename>, merges its `devices:` over the config-level
+    `devices:`. The device file is authoritative for input/UART paths.
+
+    If `device_config_file` is unset, returns config unchanged (the
+    config-level `devices:` is used directly).
+
+    If the file is missing, unreadable, or has no `devices:` section, logs
+    a loud warning and returns config unchanged -- the controller will
+    start with whatever `devices:` config.yaml has, which is most likely
+    the built-in DEFAULT_CONFIG paths from input_router.py. Those are
+    Logitech-K400-style defaults and probably DON'T match the actual
+    hardware on this Pi, so check the log if input doesn't work.
+    """
+    filename = config.get("device_config_file")
+    if not filename:
+        return config
+
+    device_path = Path(__file__).parent / "profiles" / filename
+
+    def _warn(detail: str) -> None:
+        bar = "!" * 70
+        print(bar)
+        print(f"!!! DEVICE CONFIG FAILED: {detail}")
+        print(f"!!! file: {device_path}")
+        print("!!! Falling back to built-in DEFAULT_CONFIG device paths,")
+        print("!!! which probably don't match this Pi's hardware. Fix the")
+        print("!!! device file or the device_config_file name in config.yaml.")
+        print(bar)
+
+    if not device_path.exists():
+        _warn(f"file not found: {filename}")
+        return config
+
+    try:
+        with open(device_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+    except Exception as ex:
+        _warn(f"could not parse YAML: {ex}")
+        return config
+
+    if not isinstance(loaded, dict) or "devices" not in loaded:
+        _warn(f"file has no `devices:` section: {filename}")
+        return config
+
+    merged = _deep_merge(config, {"devices": loaded["devices"]})
+    print(f"loaded device config: {filename}")
+    return merged
+
+
+def _normalize_path_list(value, label: str) -> list[str]:
+    """Coerce a `devices.mouse` / `devices.keyboard` config value to a list.
+
+    Accepts either a single string (legacy single-device form) or a list
+    of strings (new multi-device form). Always returns a fresh list.
+    Strips empty / whitespace-only entries. Prints a warning and returns
+    an empty list if the value is some unexpected shape -- the caller
+    will treat empty as a config error.
+
+    `label` is included in any warning so the operator knows which field
+    was malformed.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        v = value.strip()
+        return [v] if v else []
+    if isinstance(value, (list, tuple)):
+        out = []
+        for entry in value:
+            if isinstance(entry, str):
+                entry = entry.strip()
+                if entry:
+                    out.append(entry)
+            else:
+                print(
+                    f"warning: {label} contains a non-string entry "
+                    f"({entry!r}); skipping."
+                )
+        return out
+    print(
+        f"warning: {label} has unexpected type {type(value).__name__}; "
+        "treating as empty."
+    )
+    return []
+
+
 def validate_command_keys(commands: dict) -> None:
     """Sanity-check the command keys before the main loop accepts them.
 
@@ -141,9 +252,11 @@ def parse_args(config: dict) -> dict:
     result = dict(config)
     result["devices"] = dict(result["devices"])
     if args.mouse is not None:
-        result["devices"]["mouse"] = args.mouse
+        # CLI override replaces the whole list. Multi-device setups should
+        # use the device file; the CLI flag is for one-off debugging.
+        result["devices"]["mouse"] = [args.mouse]
     if args.keyboard is not None:
-        result["devices"]["keyboard"] = args.keyboard
+        result["devices"]["keyboard"] = [args.keyboard]
     if args.personal_uart is not None:
         result["devices"]["personal_uart"] = args.personal_uart
     if args.work_uart is not None:
@@ -509,6 +622,7 @@ def main() -> int:
     # override individual fields. With no flags and no config.yaml,
     # everything falls back to DEFAULT_CONFIG above.
     config = load_config()
+    config = load_device_config_file(config)
     try:
         config = parse_args(config)
         validate_command_keys(config["commands"])
@@ -516,10 +630,17 @@ def main() -> int:
         print(f"Config error: {ex}", file=sys.stderr)
         return 1
 
-    mouse_path = config["devices"]["mouse"]
-    keyboard_path = config["devices"]["keyboard"]
+    mouse_paths = _normalize_path_list(config["devices"]["mouse"], "devices.mouse")
+    keyboard_paths = _normalize_path_list(config["devices"]["keyboard"], "devices.keyboard")
     personal_uart_path = config["devices"]["personal_uart"]
     work_uart_path = config["devices"]["work_uart"]
+
+    if not mouse_paths:
+        print("Config error: devices.mouse is empty.", file=sys.stderr)
+        return 1
+    if not keyboard_paths:
+        print("Config error: devices.keyboard is empty.", file=sys.stderr)
+        return 1
 
     # Capture the verbose flag for use throughout the controller. We
     # promote it to a module-level variable so helper functions outside
@@ -535,19 +656,58 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
-    combined_input_device = mouse_path == keyboard_path
 
-    try:
-        mouse = InputDevice(mouse_path)
-    except OSError as ex:
-        print(f"Failed to open mouse device {mouse_path}: {ex}", file=sys.stderr)
-        return 1
+    # Open every unique path once. We dedupe by the canonical (resolved)
+    # path so two by-id symlinks pointing at the same /dev/input/eventN
+    # are not opened twice. For each opened device, build sets of which
+    # ROLES (mouse / keyboard) the config asked for. Dispatch is then by
+    # EVENT TYPE in the read loop, not by these sets -- so the sets are
+    # only used here for the startup banner and to confirm the config
+    # actually requested each device.
+    #
+    # Note on dispatch: REL_* and BTN_LEFT/RIGHT/MIDDLE go to the mouse
+    # handler regardless of which role list a fd appeared in. KEY_* (non
+    # BTN) goes to the keyboard handler. The role lists are essentially a
+    # promise -- "this fd's events are wanted" -- not a per-event filter.
+    def _canonical(p: str) -> str:
+        try:
+            return os.path.realpath(p)
+        except Exception:
+            return p
 
-    try:
-        keyboard = InputDevice(keyboard_path)
-    except OSError as ex:
-        print(f"Failed to open keyboard device {keyboard_path}: {ex}", file=sys.stderr)
-        mouse.close()
+    open_devices: dict[str, InputDevice] = {}   # canonical path -> device
+    path_to_canonical: dict[str, str] = {}      # configured path -> canonical
+    role_of_canonical: dict[str, set[str]] = {} # canonical -> {"mouse"|"keyboard"}
+
+    def _open_role(path: str, role: str) -> bool:
+        canon = _canonical(path)
+        path_to_canonical[path] = canon
+        if canon not in open_devices:
+            try:
+                open_devices[canon] = InputDevice(path)
+            except OSError as ex:
+                print(
+                    f"Failed to open {role} device {path}: {ex}",
+                    file=sys.stderr,
+                )
+                return False
+        role_of_canonical.setdefault(canon, set()).add(role)
+        return True
+
+    open_failed = False
+    for p in mouse_paths:
+        if not _open_role(p, "mouse"):
+            open_failed = True
+    for p in keyboard_paths:
+        if not _open_role(p, "keyboard"):
+            open_failed = True
+
+    if open_failed:
+        for d in open_devices.values():
+            try:
+                d.close()
+            except Exception:
+                pass
         return 1
 
     try:
@@ -555,8 +715,11 @@ def main() -> int:
         configure_uart(work_uart_path)
     except Exception as ex:
         print(f"Failed to configure UART: {ex}", file=sys.stderr)
-        mouse.close()
-        keyboard.close()
+        for d in open_devices.values():
+            try:
+                d.close()
+            except Exception:
+                pass
         return 1
 
     try:
@@ -564,8 +727,11 @@ def main() -> int:
         print(f"personal uart connected: {personal_uart_path}")
     except Exception as ex:
         print(f"Failed to open personal uart {personal_uart_path}: {ex}", file=sys.stderr)
-        mouse.close()
-        keyboard.close()
+        for d in open_devices.values():
+            try:
+                d.close()
+            except Exception:
+                pass
         return 1
 
     try:
@@ -574,8 +740,11 @@ def main() -> int:
     except Exception as ex:
         print(f"Failed to open work uart {work_uart_path}: {ex}", file=sys.stderr)
         personal_serial.close()
-        mouse.close()
-        keyboard.close()
+        for d in open_devices.values():
+            try:
+                d.close()
+            except Exception:
+                pass
         return 1
 
     serial_lines: queue.Queue[str] = queue.Queue()
@@ -638,13 +807,10 @@ def main() -> int:
     pressed_keys = set()
 
     print("Janus.InputRouter started. Press Ctrl+C to stop.")
-    print(f"mouse:    {mouse.path}")
-    print(f"mouse nm: {mouse.name}")
-    if combined_input_device:
-        print(f"input:    combined mouse+keyboard on {mouse.path}")
-    else:
-        print(f"keybd:    {keyboard.path}")
-        print(f"keybd nm: {keyboard.name}")
+    print("input devices:")
+    for canon, dev in open_devices.items():
+        roles = ",".join(sorted(role_of_canonical[canon]))
+        print(f"  [{roles:<14}] {dev.path}  ({dev.name})")
     print(f"personal: {personal_uart_path}")
     print(f"work:     {work_uart_path}")
     print("commands: p=personal, w=work, c=clipboard, q=quit")
@@ -685,8 +851,8 @@ def main() -> int:
                 )
 
             # Wait for input events or serial lines
-            #ready, _, _ = select.select([mouse.fd, keyboard.fd, sys.stdin], [], [], 0.2)
-            fds = [mouse.fd, sys.stdin] if combined_input_device else [mouse.fd, keyboard.fd, sys.stdin]
+            input_fds = [d.fd for d in open_devices.values()]
+            fds = input_fds + [sys.stdin]
             ready, _, _ = select.select(fds, [], [], 0.2)
 
             # Check for user commands
@@ -768,9 +934,18 @@ def main() -> int:
 
             target_serial = personal_serial if active_target == "P" else work_serial
 
-            # Handle mouse events
-            if mouse.fd in ready:
-                for event in mouse.read():
+            # Handle input events from every ready device. Each fd has
+            # its events drained ONCE per iteration -- we then route each
+            # event by its type within this single block. The mouse-side
+            # handlers (REL_*, BTN_LEFT/RIGHT/MIDDLE, SYN) and the
+            # keyboard-side handler (KEY_* that is not BTN_*) consume
+            # disjoint events, so a single fd whose path appears in both
+            # role lists (e.g., a Logitech K400 combo receiver) just
+            # works -- each event lands in the right place by type.
+            for dev in open_devices.values():
+                if dev.fd not in ready:
+                    continue
+                for event in dev.read():
                     # Mouse Wheel Events
                     if event.type == ecodes.EV_REL:
                         if event.code == ecodes.REL_X:
@@ -854,13 +1029,17 @@ def main() -> int:
                             elif event.value == 2:
                                 pass
 
-                        # Some combined input devices (like certain Logitech models)
-                        # report some keyboard keys as mouse buttons. Handle those here.
-                        elif combined_input_device:
+                        # Any other EV_KEY code (i.e., not BTN_LEFT/RIGHT/
+                        # MIDDLE handled above) is a keyboard-shape event,
+                        # regardless of which device emitted it. This is
+                        # how Razer Synapse-programmed buttons that come
+                        # over the Basilisk's "if02-event-kbd" node, or
+                        # combo receivers like the Logitech K400 reporting
+                        # keystrokes on the mouse node, get forwarded to
+                        # the destination PC as keystrokes.
+                        else:
                             if handle_keyboard_event(event, target_serial, pressed_keys):
                                 continue
-
-                        else:
                             log_unhandled_mouse_key(event)
 
                     # Mouse Movement Events (sent on SYN_REPORT)
@@ -1054,15 +1233,6 @@ def main() -> int:
                             write_line(target_serial, f"MOUSE HWHEEL DELTA={mouse_hwheel}")
                             mouse_hwheel = 0
 
-            # Handle keyboard events
-            if not combined_input_device and keyboard.fd in ready:
-                for event in keyboard.read():
-                    if event.type != ecodes.EV_KEY:
-                        continue
-
-                    if handle_keyboard_event(event, target_serial, pressed_keys):
-                        continue
-
     except KeyboardInterrupt:
         pass
     finally:
@@ -1085,8 +1255,11 @@ def main() -> int:
         stop_event.set()
         personal_serial.close()
         work_serial.close()
-        mouse.close()
-        keyboard.close()
+        for dev in open_devices.values():
+            try:
+                dev.close()
+            except Exception:
+                pass
         print("Janus.InputRouter stopping.")
 
     return 0

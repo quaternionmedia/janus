@@ -1,0 +1,41 @@
+# Razer Basilisk V3 + SteelSeries Apex device file.
+#
+# Active device set. Wired peripherals, separate mouse and keyboard.
+#
+# The Basilisk exposes multiple evdev nodes:
+#   event-mouse       -- REL_X/REL_Y/wheel/L+R+M buttons + wheel tilt
+#   if02-event-kbd    -- Synapse-mapped buttons that emit KEY_* events
+#                        (top macro buttons -> Ctrl+S / F5; side thumb
+#                        buttons -> PageUp / PageDown)
+#   if01-event-kbd    -- empty in our testing
+#   event-if01        -- empty in our testing
+#
+# Listing both event-mouse (under `mouse`) AND if02-event-kbd (under
+# `keyboard`) is how we capture every button on this mouse. The
+# controller routes events by type, so a KEY event from event-mouse and
+# a KEY event from if02-event-kbd both reach the keyboard handler and
+# get forwarded as KEY lines to the active PC's Pico.
+#
+# The Apex exposes two interfaces. Only the main keyboard interface is
+# wired up here; the secondary (media / G-keys) is listed below as a
+# future addition once we confirm what it emits.
+#
+# Paths use /dev/input/by-id/ symlinks for stability across reboots and
+# port changes.
+
+devices:
+  mouse:
+    - /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-event-mouse
+  keyboard:
+    - /dev/input/by-id/usb-SteelSeries_SteelSeries_Apex_Gaming_Keyboard-if01-event-kbd
+    - /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-if02-event-kbd
+
+  personal_uart: /dev/ttyAMA0
+  work_uart: /dev/ttyAMA2
+
+# Not yet wired in (haven't been captured yet -- add to `keyboard:` after
+# probing with capture_events.py if/when these turn out to emit useful
+# events):
+#   /dev/input/by-id/usb-SteelSeries_SteelSeries_Apex_Gaming_Keyboard-event-if02
+#   /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-if01-event-kbd        (empty in testing)
+#   /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-event-if01            (HID raw)
