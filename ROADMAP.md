@@ -8,6 +8,8 @@
    - Tray menu (covered by #3)
    - Global hotkey (parallel to clipboard hotkey)
 
+FIGURE OUT A WAY TO SWITCH BACK TO PERSONAL IF I LOCK WORK PC. Maybe config value for "SwitchOnLock" which will trigger switch immediately and then work pc will continue to do lock? Well, but registering hotkey overrides the default func... What if I hold windows key + alt + shift + L? Can it trigger on alt+shift+L and win+L still work in tandem? Ideally we'd be able to react to pc locking in time and could avoid hotkey.
+
 3. Tray icon (expanded scope):
    - Notification on large clipboard receive
    - Right-click context menu with submenus for clipboard (send to peer, etc.) and switch (P / W)
