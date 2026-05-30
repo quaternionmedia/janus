@@ -28,6 +28,7 @@ devices:
     - /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-event-mouse
   keyboard:
     - /dev/input/by-id/usb-SteelSeries_SteelSeries_Apex_Gaming_Keyboard-if01-event-kbd
+    - /dev/input/by-id/usb-SteelSeries_SteelSeries_Apex_Gaming_Keyboard-event-if02
     - /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-if02-event-kbd
 
   personal_uart: /dev/ttyAMA0

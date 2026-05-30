@@ -436,6 +436,17 @@ def release_all_inputs(active_serial: serial.Serial,
 def handle_keyboard_event(event, target_serial: serial.Serial, pressed_keys: set[str]) -> bool:
     key_name = ecodes.KEY.get(event.code)
 
+    if isinstance(key_name, (list, tuple)):
+        resolved = None
+        for n in key_name:
+            if isinstance(n, str) and n.startswith("KEY_"):
+                resolved = n
+                break
+        if resolved is None:
+            log_unhandled_keyboard_key(event)
+            return False
+        key_name = resolved
+
     if not isinstance(key_name, str):
         log_unhandled_keyboard_key(event)
         return False
@@ -795,12 +806,19 @@ def main() -> int:
     last_switch_time = 0.0
     last_target_announce_time = 0.0
 
+    mouse_wheel_hi_res_enabled = False
+    mouse_wheel_legacy = 0
+    mouse_wheel_hi_res = 0
+    mouse_wheel_has_hi_res = False
+    mouse_hwheel_legacy = 0
+    mouse_hwheel_hi_res = 0
+    mouse_hwheel_has_hi_res = False
     mouse_dx = 0
     mouse_dy = 0
     mouse_wheel = 0
-    mouse_wheel_hi_res_accum = 0
     mouse_hwheel = 0
-    mouse_hwheel_hi_res_accum = 0
+    # mouse_wheel_hi_res_accum = 0
+    # mouse_hwheel_hi_res_accum = 0
     left_button_down = False
     right_button_down = False
     middle_button_down = False
@@ -947,6 +965,7 @@ def main() -> int:
                     continue
                 for event in dev.read():
                     # Mouse Wheel Events
+                    
                     if event.type == ecodes.EV_REL:
                         if event.code == ecodes.REL_X:
                             mouse_dx += event.value
@@ -957,30 +976,18 @@ def main() -> int:
                         elif event.code == ecodes.REL_WHEEL:
                             mouse_wheel += event.value
 
-                        elif event.code == ecodes.REL_WHEEL_HI_RES:
-                            mouse_wheel_hi_res_accum += event.value
-
-                            while mouse_wheel_hi_res_accum >= 120:
-                                mouse_wheel += 1
-                                mouse_wheel_hi_res_accum -= 120
-
-                            while mouse_wheel_hi_res_accum <= -120:
-                                mouse_wheel -= 1
-                                mouse_wheel_hi_res_accum += 120
-
                         elif event.code == ecodes.REL_HWHEEL:
                             mouse_hwheel += event.value
 
+                        elif event.code == ecodes.REL_WHEEL_HI_RES:
+                            pass  # handled via REL_WHEEL; using both double-counts
+                            # mouse_wheel_hi_res += event.value
+                            # mouse_wheel_has_hi_res = True
+
                         elif event.code == ecodes.REL_HWHEEL_HI_RES:
-                            mouse_hwheel_hi_res_accum += event.value
-
-                            while mouse_hwheel_hi_res_accum >= 120:
-                                mouse_hwheel += 1
-                                mouse_hwheel_hi_res_accum -= 120
-
-                            while mouse_hwheel_hi_res_accum <= -120:
-                                mouse_hwheel -= 1
-                                mouse_hwheel_hi_res_accum += 120
+                            pass  # handled via REL_HWHEEL; using both double-counts
+                            # mouse_hwheel_hi_res += event.value
+                            # mouse_hwheel_has_hi_res = True
 
                         else:
                             log_unhandled_mouse_rel(event)
@@ -1232,6 +1239,39 @@ def main() -> int:
                             target_serial = personal_serial if active_target == "P" else work_serial
                             write_line(target_serial, f"MOUSE HWHEEL DELTA={mouse_hwheel}")
                             mouse_hwheel = 0
+                        
+                        # # Vertical wheel: prefer hi-res (120 units/notch),
+                        # # fall back to legacy × 120 for mice without hi-res.
+                        # if mouse_wheel_has_hi_res:
+                        #     wheel_delta = mouse_wheel_hi_res
+                        # elif mouse_wheel_legacy != 0:
+                        #     wheel_delta = mouse_wheel_legacy * 120
+                        # else:
+                        #     wheel_delta = 0
+
+                        # if wheel_delta != 0:
+                        #     target_serial = personal_serial if active_target == "P" else work_serial
+                        #     write_line(target_serial, f"MOUSE WHEEL DELTA={wheel_delta}")
+
+                        # mouse_wheel_legacy = 0
+                        # mouse_wheel_hi_res = 0
+                        # mouse_wheel_has_hi_res = False
+
+                        # # Horizontal wheel: same hi-res preference.
+                        # if mouse_hwheel_has_hi_res:
+                        #     hwheel_delta = mouse_hwheel_hi_res
+                        # elif mouse_hwheel_legacy != 0:
+                        #     hwheel_delta = mouse_hwheel_legacy * 120
+                        # else:
+                        #     hwheel_delta = 0
+
+                        # if hwheel_delta != 0:
+                        #     target_serial = personal_serial if active_target == "P" else work_serial
+                        #     write_line(target_serial, f"MOUSE HWHEEL DELTA={hwheel_delta}")
+
+                        # mouse_hwheel_legacy = 0
+                        # mouse_hwheel_hi_res = 0
+                        # mouse_hwheel_has_hi_res = False
 
     except KeyboardInterrupt:
         pass

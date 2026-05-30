@@ -24,6 +24,7 @@
 
 import board
 import busio
+import struct
 import supervisor
 import sys
 import time
@@ -32,7 +33,8 @@ import usb_hid
 
 from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.keycode import Keycode
-from adafruit_hid.mouse import Mouse
+from adafruit_hid.consumer_control import ConsumerControl
+from adafruit_hid.consumer_control_code import ConsumerControlCode
 
 
 UART_BAUD = 921_600
@@ -63,6 +65,62 @@ _CDC_WRITE_CHUNK = 256
 # silently destroyed any clipboard line larger than ~4 KB mid-transfer.)
 UART_LINE_MAX = 400_000
 
+
+# -------------------------------------------------------------------------
+# Custom HID mouse.
+#
+# Replaces adafruit_hid.Mouse to match the custom HID descriptor defined
+# in boot.py. Report layout (9 bytes, report ID 2 handled internally):
+#   [0]   buttons bitmask (5 buttons + 3 pad bits)
+#   [1:3] X int16 LE
+#   [3:5] Y int16 LE
+#   [5:7] wheel int16 LE (hi-res: 120 units = 1 physical notch)
+#   [7:9] pan int16 LE (horizontal scroll)
+#
+# Wheel values are at high resolution (120 units per notch) to match
+# the Resolution Multiplier declared in boot.py. The controller sends
+# REL_WHEEL_HI_RES values (already at 120x) when available, or
+# REL_WHEEL * 120 as fallback for mice without hi-res support.
+# -------------------------------------------------------------------------
+class JanusMouse:
+    LEFT_BUTTON = 1
+    RIGHT_BUTTON = 2
+    MIDDLE_BUTTON = 4
+    BACK_BUTTON = 8
+    FORWARD_BUTTON = 16
+
+    def __init__(self, devices):
+        self._device = None
+        for dev in devices:
+            if dev.usage_page == 0x01 and dev.usage == 0x02:
+                self._device = dev
+                break
+        if self._device is None:
+            raise RuntimeError("Custom mouse HID device not found in usb_hid.devices")
+        self._buttons = 0
+        self._report = bytearray(8)
+
+    def move(self, x=0, y=0, wheel=0, pan=0):
+        x = max(-32768, min(32767, int(x)))
+        y = max(-32768, min(32767, int(y)))
+        wheel = max(-127, min(127, int(wheel)))
+        pan = max(-127, min(127, int(pan)))
+        # Razer layout: buttons, pad(1B), pan(i8), wheel(i8), x(i16), y(i16)
+        struct.pack_into('<BBbbhh', self._report, 0,
+                         self._buttons, 0, pan, wheel, x, y)
+        self._device.send_report(self._report)
+
+    def press(self, button_mask):
+        self._buttons |= button_mask
+        self.move()
+
+    def release(self, button_mask):
+        self._buttons &= ~button_mask
+        self.move()
+
+    def release_all(self):
+        self._buttons = 0
+        self.move()
 
 # -------------------------------------------------------------------------
 # evdev KEY_* -> adafruit_hid Keycode mapping.
@@ -180,13 +238,39 @@ _KEYCODE_MAP = {
 
 
 # -------------------------------------------------------------------------
-# Mouse button mapping. Matches the wire protocol's tokens.
+# evdev KEY_* -> adafruit_hid ConsumerControlCode mapping.
+#
+# Media / transport keys live on the USB HID Consumer Page (page 0x0C),
+# which the standard keyboard descriptor can't carry. These are sent via
+# a separate ConsumerControl HID interface. The evdev names below match
+# what the SteelSeries Apex emits on its event-if02 node.
+#
+# ConsumerControl only supports one usage at a time (a single 16-bit
+# usage code in the report). Pressing a second media key while one is
+# held will implicitly release the first. This is fine in practice --
+# nobody holds two media keys simultaneously.
+# -------------------------------------------------------------------------
+
+_CONSUMER_MAP = {
+    "KEY_VOLUMEUP": ConsumerControlCode.VOLUME_INCREMENT,
+    "KEY_VOLUMEDOWN": ConsumerControlCode.VOLUME_DECREMENT,
+    "KEY_MUTE": ConsumerControlCode.MUTE,
+    "KEY_MIN_INTERESTING": ConsumerControlCode.MUTE,  # evdev alias, same code 113
+    "KEY_PLAYPAUSE": ConsumerControlCode.PLAY_PAUSE,
+    "KEY_NEXTSONG": ConsumerControlCode.SCAN_NEXT_TRACK,
+    "KEY_PREVIOUSSONG": ConsumerControlCode.SCAN_PREVIOUS_TRACK,
+}
+
+
+# -------------------------------------------------------------------------
+# Mouse button mapping. Matches the wire protocol's tokens and the
+# JanusMouse bitmask constants (same bit positions as the HID report).
 # -------------------------------------------------------------------------
 
 _MOUSE_BUTTON_BITS = {
-    "LEFT": Mouse.LEFT_BUTTON,
-    "RIGHT": Mouse.RIGHT_BUTTON,
-    "MIDDLE": Mouse.MIDDLE_BUTTON,
+    "LEFT": JanusMouse.LEFT_BUTTON,       # 1
+    "RIGHT": JanusMouse.RIGHT_BUTTON,     # 2
+    "MIDDLE": JanusMouse.MIDDLE_BUTTON,   # 4
 }
 
 
@@ -253,11 +337,10 @@ def _handle_mouse_move(line, mouse):
         if v is not None:
             dy = v
     if dx or dy:
-        # adafruit_hid clamps to -127..127 internally, which matches the
-        # standard HID boot mouse report. Large deltas from the controller
-        # (rare; only on very fast Logitech motion) get truncated. The
-        # controller already accumulates per-SYN deltas, so values rarely
-        # exceed +/-50 in practice.
+        # JanusMouse.move clamps to int16 (-32768..32767), a major
+        # improvement over the boot mouse's int8 (-127..127). With the
+        # Razer Basilisk V3 at high DPI, fast swipes can exceed +-127
+        # per SYN; 16-bit eliminates that clamping.
         mouse.move(x=dx, y=dy)
 
 
@@ -283,7 +366,8 @@ def _handle_mouse_button(line, mouse):
 
 
 def _handle_mouse_wheel(line, mouse, horizontal=False):
-    # "MOUSE WHEEL DELTA=1" or "MOUSE HWHEEL DELTA=-1"
+    # "MOUSE WHEEL DELTA=120" or "MOUSE HWHEEL DELTA=-120"
+    # Values are at hi-res scale (120 = 1 physical notch) for vertical.
     parts = line.split(b" ")
     delta = 0
     for p in parts:
@@ -293,18 +377,13 @@ def _handle_mouse_wheel(line, mouse, horizontal=False):
             break
     if delta == 0:
         return
-    # adafruit_hid's Mouse.move signature: move(x=0, y=0, wheel=0).
-    # There's no separate "horizontal wheel" parameter on the standard
-    # boot-mouse HID descriptor, so HWHEEL falls back to vertical scroll.
-    # If we ever care, we'd swap to a custom HID descriptor with hwheel.
-    # Until then, treat both as wheel and accept the limitation.
     if horizontal:
-        # No-op rather than misleading. Most apps don't use HWHEEL anyway.
-        return
-    mouse.move(wheel=delta)
+        mouse.move(pan=delta)
+    else:
+        mouse.move(wheel=delta)
 
 
-def _handle_key(line, keyboard):
+def _handle_key(line, keyboard, cc):
     # "KEY NAME=KEY_A STATE=DOWN"
     parts = line.split(b" ")
     name = None
@@ -319,15 +398,27 @@ def _handle_key(line, keyboard):
             state = v
     if not name or not state:
         return
+
+    # Try the standard keyboard map first.
     keycode = _KEYCODE_MAP.get(name)
-    if keycode is None:
-        # Unmapped key: silently ignore. Could log via print() to REPL
-        # for debugging but we don't want that in the hot path.
+    if keycode is not None:
+        if state == "DOWN":
+            keyboard.press(keycode)
+        elif state == "UP":
+            keyboard.release(keycode)
         return
-    if state == "DOWN":
-        keyboard.press(keycode)
-    elif state == "UP":
-        keyboard.release(keycode)
+
+    # Try the consumer-control (media key) map.
+    cc_code = _CONSUMER_MAP.get(name)
+    if cc_code is not None:
+        if state == "DOWN":
+            cc.press(cc_code)
+        elif state == "UP":
+            cc.release()
+        return
+
+    # Unmapped key: silently ignore. Could log via print() to REPL
+    # for debugging but we don't want that in the hot path.
 
 
 # =========================================================================
@@ -373,7 +464,7 @@ def _cdc_write_all(cdc, data):
         # prevents an infinite spin against a dead host.
 
 
-def _route_line(line, keyboard, mouse, cdc):
+def _route_line(line, keyboard, mouse, cc, cdc):
     """Dispatch one complete line (no trailing newline).
 
     Lines matching an HID prefix are handled locally. Everything else is
@@ -395,7 +486,7 @@ def _route_line(line, keyboard, mouse, cdc):
         _handle_mouse_wheel(line, mouse, horizontal=False)
         return
     if line.startswith(b"KEY "):
-        _handle_key(line, keyboard)
+        _handle_key(line, keyboard, cc)
         return
 
     # Non-input message: passthrough to the agent on CDC, in bounded
@@ -433,7 +524,8 @@ def main():
     )
 
     keyboard = Keyboard(usb_hid.devices)
-    mouse = Mouse(usb_hid.devices)
+    mouse = JanusMouse(usb_hid.devices)
+    cc = ConsumerControl(usb_hid.devices)
 
     # Line accumulator for UART->CDC direction. UART bytes don't always
     # arrive line-aligned; we buffer until we see "\n" and then dispatch.
@@ -480,7 +572,7 @@ def main():
                             continue
 
                     try:
-                        _route_line(line_bytes, keyboard, mouse, cdc)
+                        _route_line(line_bytes, keyboard, mouse, cc, cdc)
                     except Exception as ex:
                         # A malformed input line must not crash the bridge.
                         # Log to REPL and continue; the stream is still
