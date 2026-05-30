@@ -21,17 +21,17 @@ internal static class Program
     private static int _serialReadBufferSize = 1024 * 1024;
     private static int _serialWriteBufferSize = 1024 * 1024;
 
+    // Main loop timing
+    private static int _timingMainTickMs = 50;
+    private static int _timingReconnectDelayMs = 1000;
+    private static int _timingCursorSendIntervalMs = 100;
+    private static int _timingCursorKeepaliveSeconds = 2;
+    private static int _timingDisplayRefreshSeconds = 10;
+
     // Clipboard policy
     private static int _clipboardAutoSyncBytes = 16 * 1024;
     private static int _clipboardMaxBytes = 256 * 1024;
     private static ClipboardOutboundMode _clipboardOutboundMode = ClipboardOutboundMode.Auto;
-
-    // Main loop timing
-    private static int _loopMainTickMs = 50;
-    private static int _loopReconnectDelayMs = 1000;
-    private static int _loopCursorSendIntervalMs = 100;
-    private static int _loopCursorKeepaliveSeconds = 2;
-    private static int _loopDisplayRefreshSeconds = 10;
 
     // Manual clipboard-push triggers. Lets the user push this PC's
     // clipboard to the peer without going to the controller terminal.
@@ -123,7 +123,7 @@ internal static class Program
 
                 if (port is null)
                 {
-                    await Task.Delay(_loopReconnectDelayMs, cts.Token);
+                    await Task.Delay(_timingReconnectDelayMs, cts.Token);
                     continue;
                 }
 
@@ -152,7 +152,7 @@ internal static class Program
                     {
                         SendDisplayIfChanged(port, deviceId);
                         SendCursorIfNeeded(port, deviceId);
-                        await Task.Delay(_loopMainTickMs, cts.Token);
+                        await Task.Delay(_timingMainTickMs, cts.Token);
                     }
                 }
                 catch (OperationCanceledException)
@@ -194,7 +194,7 @@ internal static class Program
                 if (!cts.Token.IsCancellationRequested)
                 {
                     Console.WriteLine($"Serial disconnected. Retrying: {portName}");
-                    await Task.Delay(_loopReconnectDelayMs, cts.Token);
+                    await Task.Delay(_timingReconnectDelayMs, cts.Token);
                 }
             }
         }
@@ -239,8 +239,7 @@ internal static class Program
 
             ApplySerialConfig(cfg.Serial);
             ApplyClipboardConfig(cfg.Clipboard);
-            ApplyLoopConfig(cfg.Loop);
-            ApplyPushConfig(cfg.Push);
+            ApplyTimingConfig(cfg.Timing);
         }
         catch (Exception ex)
         {
@@ -273,47 +272,38 @@ internal static class Program
                 _ => ClipboardOutboundMode.Auto,
             };
         }
-    }
 
-    private static void ApplyLoopConfig(LoopSection? section)
-    {
-        if (section is null) return;
-        if (section.MainTickMs > 0) _loopMainTickMs = section.MainTickMs;
-        if (section.ReconnectDelayMs > 0) _loopReconnectDelayMs = section.ReconnectDelayMs;
-        if (section.CursorSendIntervalMs > 0) _loopCursorSendIntervalMs = section.CursorSendIntervalMs;
-        if (section.CursorKeepaliveSeconds > 0) _loopCursorKeepaliveSeconds = section.CursorKeepaliveSeconds;
-        if (section.DisplayRefreshSeconds > 0) _loopDisplayRefreshSeconds = section.DisplayRefreshSeconds;
-    }
-
-    private static void ApplyPushConfig(PushSection? section)
-    {
-        if (section is null) return;
-        if (!string.IsNullOrWhiteSpace(section.ConsoleKey))
+        if (section.Push is null) return;
+        var push = section.Push;
+        if (!string.IsNullOrWhiteSpace(push.ConsoleKey))
         {
-            _pushConsoleKey = section.ConsoleKey.Trim().ToLowerInvariant();
+            _pushConsoleKey = push.ConsoleKey.Trim().ToLowerInvariant();
         }
-        _pushHotkeyEnabled = section.HotkeyEnabled;
-        _pushHotkeyCtrl = section.HotkeyCtrl;
-        _pushHotkeyShift = section.HotkeyShift;
-        _pushHotkeyAlt = section.HotkeyAlt;
-        if (!string.IsNullOrWhiteSpace(section.HotkeyKey))
+        _pushHotkeyEnabled = push.HotkeyEnabled;
+        _pushHotkeyCtrl = push.HotkeyCtrl;
+        _pushHotkeyShift = push.HotkeyShift;
+        _pushHotkeyAlt = push.HotkeyAlt;
+        if (!string.IsNullOrWhiteSpace(push.HotkeyKey))
         {
-            _pushHotkeyKey = section.HotkeyKey.Trim().ToUpperInvariant();
+            _pushHotkeyKey = push.HotkeyKey.Trim().ToUpperInvariant();
         }
     }
 
-    private enum ClipboardOutboundMode
+    private static void ApplyTimingConfig(TimingSection? section)
     {
-        Auto,
-        Manual,
+        if (section is null) return;
+        if (section.MainTickMs > 0) _timingMainTickMs = section.MainTickMs;
+        if (section.ReconnectDelayMs > 0) _timingReconnectDelayMs = section.ReconnectDelayMs;
+        if (section.CursorSendIntervalMs > 0) _timingCursorSendIntervalMs = section.CursorSendIntervalMs;
+        if (section.CursorKeepaliveSeconds > 0) _timingCursorKeepaliveSeconds = section.CursorKeepaliveSeconds;
+        if (section.DisplayRefreshSeconds > 0) _timingDisplayRefreshSeconds = section.DisplayRefreshSeconds;
     }
 
     private sealed class AgentConfig
     {
         public SerialSection? Serial { get; set; }
         public ClipboardSection? Clipboard { get; set; }
-        public LoopSection? Loop { get; set; }
-        public PushSection? Push { get; set; }
+        public TimingSection? Timing { get; set; }
     }
 
     private sealed class SerialSection
@@ -325,14 +315,21 @@ internal static class Program
         public int WriteBufferSize { get; set; }
     }
 
+    private enum ClipboardOutboundMode
+    {
+        Auto,
+        Manual,
+    }
+
     private sealed class ClipboardSection
     {
         public string? OutboundMode { get; set; }
         public int AutoSyncBytes { get; set; }
         public int MaxBytes { get; set; }
+        public PushSection? Push { get; set; }
     }
 
-    private sealed class LoopSection
+    private sealed class TimingSection
     {
         public int MainTickMs { get; set; }
         public int ReconnectDelayMs { get; set; }
@@ -428,7 +425,7 @@ internal static class Program
         string displayMessage = $"DISPLAY {deviceId} L={left} T={top} W={width} H={height}";
         bool changed = _lastDisplayMessage != displayMessage;
 
-        bool refreshDue = DateTime.UtcNow - _lastDisplaySentUtc >= TimeSpan.FromSeconds(_loopDisplayRefreshSeconds);
+        bool refreshDue = DateTime.UtcNow - _lastDisplaySentUtc >= TimeSpan.FromSeconds(_timingDisplayRefreshSeconds);
 
         if (!changed && _displaySentForCurrentConnection && !refreshDue)
         {
@@ -449,7 +446,7 @@ internal static class Program
             return;
         }
 
-        if (DateTime.UtcNow - _lastCursorSentUtc < TimeSpan.FromMilliseconds(_loopCursorSendIntervalMs))
+        if (DateTime.UtcNow - _lastCursorSentUtc < TimeSpan.FromMilliseconds(_timingCursorSendIntervalMs))
         {
             return;
         }
@@ -460,7 +457,7 @@ internal static class Program
         }
 
         bool changed = point.X != _lastCursorX || point.Y != _lastCursorY;
-        bool keepaliveDue = DateTime.UtcNow - _lastCursorSentUtc >= TimeSpan.FromSeconds(_loopCursorKeepaliveSeconds);
+        bool keepaliveDue = DateTime.UtcNow - _lastCursorSentUtc >= TimeSpan.FromSeconds(_timingCursorKeepaliveSeconds);
 
         if (!changed && !keepaliveDue)
         {
@@ -706,6 +703,99 @@ internal static class Program
 
     private static string GetClipboardTextSafe()
     {
+        ClipboardWindow? window = _clipboardWindow;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+        {
+            // Window not ready (startup race) or disposed (shutdown).
+            // Fall back to a one-off STA thread to preserve correctness.
+            return GetClipboardTextOnFreshSTAThread();
+        }
+
+        string result = string.Empty;
+        Action work = () =>
+        {
+            try
+            {
+                if (Clipboard.ContainsText())
+                {
+                    result = Clipboard.GetText();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Clipboard get error: {ex.Message}");
+            }
+        };
+
+        try
+        {
+            if (window.InvokeRequired)
+            {
+                window.Invoke(work);
+            }
+            else
+            {
+                // Already on the STA thread (e.g. OnClipboardChanged); run
+                // directly to avoid InvokeRequired's needless marshal hop.
+                work();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Clipboard get marshal error: {ex.Message}");
+        }
+
+        return result;
+    }
+
+    private static void SetClipboardTextSafe(string text)
+    {
+        ClipboardWindow? window = _clipboardWindow;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+        {
+            SetClipboardTextOnFreshSTAThread(text);
+            return;
+        }
+
+        Exception? capturedException = null;
+        Action work = () =>
+        {
+            try
+            {
+                Clipboard.SetText(text ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                capturedException = ex;
+            }
+        };
+
+        try
+        {
+            if (window.InvokeRequired)
+            {
+                window.Invoke(work);
+            }
+            else
+            {
+                work();
+            }
+        }
+        catch (Exception ex)
+        {
+            capturedException = ex;
+        }
+
+        if (capturedException is not null)
+        {
+            throw capturedException;
+        }
+    }
+
+    private static string GetClipboardTextOnFreshSTAThread()
+    {
+        // Fallback for startup/shutdown when the monitor window isn't
+        // available. Same behavior as the pre-refactor implementation.
         string result = string.Empty;
         Exception? capturedException = null;
 
@@ -736,7 +826,7 @@ internal static class Program
         return result;
     }
 
-    private static void SetClipboardTextSafe(string text)
+    private static void SetClipboardTextOnFreshSTAThread(string text)
     {
         Exception? capturedException = null;
 
