@@ -39,8 +39,10 @@ supervisor.set_usb_identification(
     vid=0x239A,                # Adafruit-assigned VID; safe for hobby use
     pid=0xCAFE,                # arbitrary PID we picked; unique within Janus
     
-    # vid=0x1532, # Razer's VID; DO NOT USE THIS (requires special permissions on Windows)
-    # pid=0x0099  # Razer Basilisk V3's PID; DO NOT USE THIS (requires special permissions on Windows
+    # -----  DO NOT USE THESE (requires special permissions on Windows)  -----
+    #   vid=0x1532, # Razer's VID;
+    #   pid=0x0099  # Razer Basilisk V3's PID;
+    # ------------------------------------------------------------------------
 )
 
 

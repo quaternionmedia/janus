@@ -34,9 +34,6 @@ devices:
   personal_uart: /dev/ttyAMA0
   work_uart: /dev/ttyAMA2
 
-# Not yet wired in (haven't been captured yet -- add to `keyboard:` after
-# probing with capture_events.py if/when these turn out to emit useful
-# events):
-#   /dev/input/by-id/usb-SteelSeries_SteelSeries_Apex_Gaming_Keyboard-event-if02
+# Not wired in:
 #   /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-if01-event-kbd        (empty in testing)
 #   /dev/input/by-id/usb-Razer_Razer_Basilisk_V3-event-if01            (HID raw)

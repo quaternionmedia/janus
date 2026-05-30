@@ -806,19 +806,10 @@ def main() -> int:
     last_switch_time = 0.0
     last_target_announce_time = 0.0
 
-    mouse_wheel_hi_res_enabled = False
-    mouse_wheel_legacy = 0
-    mouse_wheel_hi_res = 0
-    mouse_wheel_has_hi_res = False
-    mouse_hwheel_legacy = 0
-    mouse_hwheel_hi_res = 0
-    mouse_hwheel_has_hi_res = False
     mouse_dx = 0
     mouse_dy = 0
     mouse_wheel = 0
     mouse_hwheel = 0
-    # mouse_wheel_hi_res_accum = 0
-    # mouse_hwheel_hi_res_accum = 0
     left_button_down = False
     right_button_down = False
     middle_button_down = False
@@ -964,7 +955,7 @@ def main() -> int:
                 if dev.fd not in ready:
                     continue
                 for event in dev.read():
-                    # Mouse Wheel Events
+                    # Mouse REL events (movement + wheel)
                     
                     if event.type == ecodes.EV_REL:
                         if event.code == ecodes.REL_X:
@@ -981,13 +972,9 @@ def main() -> int:
 
                         elif event.code == ecodes.REL_WHEEL_HI_RES:
                             pass  # handled via REL_WHEEL; using both double-counts
-                            # mouse_wheel_hi_res += event.value
-                            # mouse_wheel_has_hi_res = True
 
                         elif event.code == ecodes.REL_HWHEEL_HI_RES:
                             pass  # handled via REL_HWHEEL; using both double-counts
-                            # mouse_hwheel_hi_res += event.value
-                            # mouse_hwheel_has_hi_res = True
 
                         else:
                             log_unhandled_mouse_rel(event)
@@ -1006,7 +993,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON LEFT=UP")
                                     write_line(target_serial, "MOUSE BUTTON LEFT=UP")
                             elif event.value == 2:
-                                pass
+                                pass # BTN auto-repeat; ignore and keep current state
 
                         elif event.code == ecodes.BTN_RIGHT:
                             if event.value == 1:
@@ -1020,7 +1007,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON RIGHT=UP")
                                     write_line(target_serial, "MOUSE BUTTON RIGHT=UP")
                             elif event.value == 2:
-                                pass
+                                pass # BTN auto-repeat; ignore and keep current state
 
                         elif event.code == ecodes.BTN_MIDDLE:
                             if event.value == 1:
@@ -1034,7 +1021,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON MIDDLE=UP")
                                     write_line(target_serial, "MOUSE BUTTON MIDDLE=UP")
                             elif event.value == 2:
-                                pass
+                                pass # BTN auto-repeat; ignore and keep current state
 
                         # Any other EV_KEY code (i.e., not BTN_LEFT/RIGHT/
                         # MIDDLE handled above) is a keyboard-shape event,
@@ -1239,39 +1226,6 @@ def main() -> int:
                             target_serial = personal_serial if active_target == "P" else work_serial
                             write_line(target_serial, f"MOUSE HWHEEL DELTA={mouse_hwheel}")
                             mouse_hwheel = 0
-                        
-                        # # Vertical wheel: prefer hi-res (120 units/notch),
-                        # # fall back to legacy × 120 for mice without hi-res.
-                        # if mouse_wheel_has_hi_res:
-                        #     wheel_delta = mouse_wheel_hi_res
-                        # elif mouse_wheel_legacy != 0:
-                        #     wheel_delta = mouse_wheel_legacy * 120
-                        # else:
-                        #     wheel_delta = 0
-
-                        # if wheel_delta != 0:
-                        #     target_serial = personal_serial if active_target == "P" else work_serial
-                        #     write_line(target_serial, f"MOUSE WHEEL DELTA={wheel_delta}")
-
-                        # mouse_wheel_legacy = 0
-                        # mouse_wheel_hi_res = 0
-                        # mouse_wheel_has_hi_res = False
-
-                        # # Horizontal wheel: same hi-res preference.
-                        # if mouse_hwheel_has_hi_res:
-                        #     hwheel_delta = mouse_hwheel_hi_res
-                        # elif mouse_hwheel_legacy != 0:
-                        #     hwheel_delta = mouse_hwheel_legacy * 120
-                        # else:
-                        #     hwheel_delta = 0
-
-                        # if hwheel_delta != 0:
-                        #     target_serial = personal_serial if active_target == "P" else work_serial
-                        #     write_line(target_serial, f"MOUSE HWHEEL DELTA={hwheel_delta}")
-
-                        # mouse_hwheel_legacy = 0
-                        # mouse_hwheel_hi_res = 0
-                        # mouse_hwheel_has_hi_res = False
 
     except KeyboardInterrupt:
         pass

@@ -70,12 +70,7 @@ UART_LINE_MAX = 400_000
 # Custom HID mouse.
 #
 # Replaces adafruit_hid.Mouse to match the custom HID descriptor defined
-# in boot.py. Report layout (9 bytes, report ID 2 handled internally):
-#   [0]   buttons bitmask (5 buttons + 3 pad bits)
-#   [1:3] X int16 LE
-#   [3:5] Y int16 LE
-#   [5:7] wheel int16 LE (hi-res: 120 units = 1 physical notch)
-#   [7:9] pan int16 LE (horizontal scroll)
+# in boot.py.
 #
 # Wheel values are at high resolution (120 units per notch) to match
 # the Resolution Multiplier declared in boot.py. The controller sends
@@ -367,7 +362,6 @@ def _handle_mouse_button(line, mouse):
 
 def _handle_mouse_wheel(line, mouse, horizontal=False):
     # "MOUSE WHEEL DELTA=120" or "MOUSE HWHEEL DELTA=-120"
-    # Values are at hi-res scale (120 = 1 physical notch) for vertical.
     parts = line.split(b" ")
     delta = 0
     for p in parts:
