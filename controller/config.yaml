@@ -33,6 +33,15 @@ serial:
   baud: 921600
 
 switching:
+  # When true, the controller automatically switches the active target
+  # when the cursor pushes against the source monitor's edge for long
+  # enough (see edge_arm_pixels + switch_push_pixels below).
+  # When false, switching only happens via explicit triggers: 'p'/'w'
+  # in the controller terminal, 's' in an agent's console, or the
+  # agent's global switch hotkey. Recommended for tray-icon-heavy
+  # workflows where reaching for the taskbar can trip the auto-switch.
+  auto_edge_switch_enabled: false
+
   # Cursor must be within this many pixels of the edge before push
   # accumulation can begin.
   edge_arm_pixels: 2

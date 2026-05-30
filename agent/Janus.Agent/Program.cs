@@ -37,13 +37,23 @@ internal static class Program
     // clipboard to the peer without going to the controller terminal.
     // All three triggers (console key, global hotkey, future tray) call
     // the same PushClipboardToPeer() action.
-    private static string _pushConsoleKey = "c";          // key in the agent's own console
-    private static bool _pushHotkeyEnabled = false;        // global hotkey, off by default
-    private static bool _pushHotkeyCtrl = true;
-    private static bool _pushHotkeyShift = true;
-    private static bool _pushHotkeyAlt = false;
-    private static string _pushHotkeyKey = "C";            // single character A-Z / 0-9
+    private static string _clipboardPushConsoleKey = "c";   // key in the agent's own console
+    private static bool _clipboardPushHotkeyEnabled = false;
+    private static bool _clipboardPushHotkeyCtrl = true;
+    private static bool _clipboardPushHotkeyShift = true;
+    private static bool _clipboardPushHotkeyAlt = false;
+    private static string _clipboardPushHotkeyKey = "C";    // single character A-Z / 0-9
 
+    // Switch-to-peer triggers. Mirrors the clipboard-push pattern.
+    // Sends "SWITCH PEER" to the controller, which performs the switch
+    // to whichever side ISN'T this agent.
+    private static string _switchConsoleKey = "s";
+    private static bool _switchHotkeyEnabled = false;
+    private static bool _switchHotkeyCtrl = true;
+    private static bool _switchHotkeyShift = true;
+    private static bool _switchHotkeyAlt = false;
+    private static string _switchHotkeyKey = "S";
+    
     // ---- Runtime state --------------------------------------------------
 
     private static volatile bool _isActiveTarget;
@@ -108,8 +118,10 @@ internal static class Program
         Console.WriteLine($"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
         Console.WriteLine($"port: {portName}");
         Console.WriteLine($"clipboard outbound mode: {_clipboardOutboundMode}");
-        Console.WriteLine($"push: console key '{_pushConsoleKey}'"
-            + (_pushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
+        Console.WriteLine($"clipboard push: console key '{_clipboardPushConsoleKey}'"
+            + (_clipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
+        Console.WriteLine($"switch target: console key '{_switchConsoleKey}'"
+            + (_switchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
         Console.WriteLine();
 
         StartClipboardMonitor();
@@ -240,6 +252,7 @@ internal static class Program
             ApplySerialConfig(cfg.Serial);
             ApplyClipboardConfig(cfg.Clipboard);
             ApplyTimingConfig(cfg.Timing);
+            ApplySwitchConfig(cfg.Switch);
         }
         catch (Exception ex)
         {
@@ -255,6 +268,16 @@ internal static class Program
         if (section.WriteTimeoutMs > 0) _serialWriteTimeoutMs = section.WriteTimeoutMs;
         if (section.ReadBufferSize > 0) _serialReadBufferSize = section.ReadBufferSize;
         if (section.WriteBufferSize > 0) _serialWriteBufferSize = section.WriteBufferSize;
+    }
+
+    private static void ApplyTimingConfig(TimingSection? section)
+    {
+        if (section is null) return;
+        if (section.MainTickMs > 0) _timingMainTickMs = section.MainTickMs;
+        if (section.ReconnectDelayMs > 0) _timingReconnectDelayMs = section.ReconnectDelayMs;
+        if (section.CursorSendIntervalMs > 0) _timingCursorSendIntervalMs = section.CursorSendIntervalMs;
+        if (section.CursorKeepaliveSeconds > 0) _timingCursorKeepaliveSeconds = section.CursorKeepaliveSeconds;
+        if (section.DisplayRefreshSeconds > 0) _timingDisplayRefreshSeconds = section.DisplayRefreshSeconds;
     }
 
     private static void ApplyClipboardConfig(ClipboardSection? section)
@@ -277,26 +300,33 @@ internal static class Program
         var push = section.Push;
         if (!string.IsNullOrWhiteSpace(push.ConsoleKey))
         {
-            _pushConsoleKey = push.ConsoleKey.Trim().ToLowerInvariant();
+            _clipboardPushConsoleKey = push.ConsoleKey.Trim().ToLowerInvariant();
         }
-        _pushHotkeyEnabled = push.HotkeyEnabled;
-        _pushHotkeyCtrl = push.HotkeyCtrl;
-        _pushHotkeyShift = push.HotkeyShift;
-        _pushHotkeyAlt = push.HotkeyAlt;
+        _clipboardPushHotkeyEnabled = push.HotkeyEnabled;
+        _clipboardPushHotkeyCtrl = push.HotkeyCtrl;
+        _clipboardPushHotkeyShift = push.HotkeyShift;
+        _clipboardPushHotkeyAlt = push.HotkeyAlt;
         if (!string.IsNullOrWhiteSpace(push.HotkeyKey))
         {
-            _pushHotkeyKey = push.HotkeyKey.Trim().ToUpperInvariant();
+            _clipboardPushHotkeyKey = push.HotkeyKey.Trim().ToUpperInvariant();
         }
     }
 
-    private static void ApplyTimingConfig(TimingSection? section)
+    private static void ApplySwitchConfig(SwitchSection? section)
     {
         if (section is null) return;
-        if (section.MainTickMs > 0) _timingMainTickMs = section.MainTickMs;
-        if (section.ReconnectDelayMs > 0) _timingReconnectDelayMs = section.ReconnectDelayMs;
-        if (section.CursorSendIntervalMs > 0) _timingCursorSendIntervalMs = section.CursorSendIntervalMs;
-        if (section.CursorKeepaliveSeconds > 0) _timingCursorKeepaliveSeconds = section.CursorKeepaliveSeconds;
-        if (section.DisplayRefreshSeconds > 0) _timingDisplayRefreshSeconds = section.DisplayRefreshSeconds;
+        if (!string.IsNullOrWhiteSpace(section.ConsoleKey))
+        {
+            _switchConsoleKey = section.ConsoleKey.Trim().ToLowerInvariant();
+        }
+        _switchHotkeyEnabled = section.HotkeyEnabled;
+        _switchHotkeyCtrl = section.HotkeyCtrl;
+        _switchHotkeyShift = section.HotkeyShift;
+        _switchHotkeyAlt = section.HotkeyAlt;
+        if (!string.IsNullOrWhiteSpace(section.HotkeyKey))
+        {
+            _switchHotkeyKey = section.HotkeyKey.Trim().ToUpperInvariant();
+        }
     }
 
     private sealed class AgentConfig
@@ -304,6 +334,7 @@ internal static class Program
         public SerialSection? Serial { get; set; }
         public ClipboardSection? Clipboard { get; set; }
         public TimingSection? Timing { get; set; }
+        public SwitchSection? Switch { get; set; }
     }
 
     private sealed class SerialSection
@@ -313,6 +344,15 @@ internal static class Program
         public int WriteTimeoutMs { get; set; }
         public int ReadBufferSize { get; set; }
         public int WriteBufferSize { get; set; }
+    }
+
+    private sealed class TimingSection
+    {
+        public int MainTickMs { get; set; }
+        public int ReconnectDelayMs { get; set; }
+        public int CursorSendIntervalMs { get; set; }
+        public int CursorKeepaliveSeconds { get; set; }
+        public int DisplayRefreshSeconds { get; set; }
     }
 
     private enum ClipboardOutboundMode
@@ -329,15 +369,6 @@ internal static class Program
         public PushSection? Push { get; set; }
     }
 
-    private sealed class TimingSection
-    {
-        public int MainTickMs { get; set; }
-        public int ReconnectDelayMs { get; set; }
-        public int CursorSendIntervalMs { get; set; }
-        public int CursorKeepaliveSeconds { get; set; }
-        public int DisplayRefreshSeconds { get; set; }
-    }
-
     private sealed class PushSection
     {
         public string? ConsoleKey { get; set; }
@@ -348,6 +379,16 @@ internal static class Program
         public string? HotkeyKey { get; set; }
     }
 
+    private sealed class SwitchSection
+    {
+        public string? ConsoleKey { get; set; }
+        public bool HotkeyEnabled { get; set; }
+        public bool HotkeyCtrl { get; set; }
+        public bool HotkeyShift { get; set; }
+        public bool HotkeyAlt { get; set; }
+        public string? HotkeyKey { get; set; }
+    }
+ 
     // ---- Serial port ----------------------------------------------------
 
     private static SerialPort? TryOpenPort(string portName)
@@ -533,7 +574,7 @@ internal static class Program
         }
     }
 
-    // ---- Clipboard handlers ---------------------------------------------
+    // ---- Clipboard & Switch trigger handlers ---------------------------------------------
 
     // Single shared action for all manual push triggers (console key,
     // global hotkey, future tray). Grabs the current active port and
@@ -551,6 +592,30 @@ internal static class Program
 
         Console.WriteLine($"push ({source}): sending clipboard to peer.");
         HandleClipboardRequest(port);
+    }
+
+    // Single shared action for all manual switch triggers (console key,
+    // global hotkey, future tray). Sends "SWITCH PEER" to the controller,
+    // which switches to whichever side ISN'T this agent. Safe to call
+    // from any thread; snapshots the port first.
+    private static void SwitchToPeer(string source)
+    {
+        SerialPort? port = _activePort;
+        if (port is null || !port.IsOpen)
+        {
+            Console.WriteLine($"switch ({source}) ignored: no serial connection.");
+            return;
+        }
+ 
+        try
+        {
+            port.WriteLine("SWITCH PEER");
+            Console.WriteLine($"switch ({source}): requested switch to peer.");
+        }
+        catch (Exception ex) when (IsSerialException(ex))
+        {
+            Console.WriteLine($"switch send error: {ex.Message}");
+        }
     }
 
     private static void HandleClipboardRequest(SerialPort port)
@@ -935,9 +1000,13 @@ internal static class Program
 
                     // Compare case-insensitively against the configured key.
                     string pressed = info.KeyChar.ToString().ToLowerInvariant();
-                    if (pressed == _pushConsoleKey)
+                    if (pressed == _clipboardPushConsoleKey)
                     {
                         PushClipboardToPeer("console");
+                    }
+                    else if (pressed == _switchConsoleKey)
+                    {
+                        SwitchToPeer("console");
                     }
                 }
                 catch (InvalidOperationException)
@@ -968,7 +1037,8 @@ internal static class Program
             {
                 _clipboardWindow = new ClipboardWindow(
                     OnClipboardChanged,
-                    () => PushClipboardToPeer("hotkey"));
+                    onPushHotkey: () => PushClipboardToPeer("hotkey"),
+                    onSwitchHotkey: () => SwitchToPeer("hotkey"));
                 Application.Run(_clipboardWindow);
             }
             catch (Exception ex)
@@ -1124,7 +1194,8 @@ internal static class Program
     {
         private const int WmClipboardupdate = 0x031D;
         private const int WmHotkey = 0x0312;
-        private const int HotkeyId = 0xB001;   // arbitrary unique id for our hotkey
+        private const int PushHotkeyId = 0xB001;
+        private const int SwitchHotkeyId = 0xB002;
 
         // Windows modifier flags for RegisterHotKey.
         private const uint ModAlt = 0x0001;
@@ -1133,13 +1204,16 @@ internal static class Program
         private const uint ModNorepeat = 0x4000;
 
         private readonly Action _onChange;
-        private readonly Action? _onHotkey;
-        private bool _hotkeyRegistered;
+        private readonly Action? _onPushHotkey;
+        private readonly Action? _onSwitchHotkey;
+        private bool _pushHotkeyRegistered;
+        private bool _switchHotkeyRegistered;
 
-        public ClipboardWindow(Action onChange, Action? onHotkey)
+        public ClipboardWindow(Action onChange,  Action? onPushHotkey, Action? onSwitchHotkey)
         {
             _onChange = onChange;
-            _onHotkey = onHotkey;
+            _onPushHotkey = onPushHotkey;
+            _onSwitchHotkey = onSwitchHotkey;
 
             // Message-only, never shown, never in taskbar.
             ShowInTaskbar = false;
@@ -1151,48 +1225,62 @@ internal static class Program
             Load += (_, _) => Hide();
 
             AddClipboardFormatListener(Handle);
-            TryRegisterHotkey();
+            TryRegisterHotkeys();
         }
 
-        private void TryRegisterHotkey()
+        private void TryRegisterHotkeys()
         {
-            if (!_pushHotkeyEnabled || _onHotkey is null)
+            if (_clipboardPushHotkeyEnabled && _onPushHotkey is not null)
             {
-                return;
+                _pushHotkeyRegistered = RegisterSingleHotkey(
+                    PushHotkeyId, "clipboard push",
+                    _clipboardPushHotkeyCtrl, _clipboardPushHotkeyShift, _clipboardPushHotkeyAlt,
+                    _clipboardPushHotkeyKey);
             }
-
+ 
+            if (_switchHotkeyEnabled && _onSwitchHotkey is not null)
+            {
+                _switchHotkeyRegistered = RegisterSingleHotkey(
+                    SwitchHotkeyId, "switch",
+                    _switchHotkeyCtrl, _switchHotkeyShift, _switchHotkeyAlt,
+                    _switchHotkeyKey);
+            }
+        }
+ 
+        private bool RegisterSingleHotkey(int id, string label, bool ctrl, bool shift, bool alt, string key)
+        {
             uint mods = ModNorepeat;
-            if (_pushHotkeyCtrl) mods |= ModControl;
-            if (_pushHotkeyShift) mods |= ModShift;
-            if (_pushHotkeyAlt) mods |= ModAlt;
-
+            if (ctrl) mods |= ModControl;
+            if (shift) mods |= ModShift;
+            if (alt) mods |= ModAlt;
+ 
+            if (string.IsNullOrEmpty(key))
+            {
+                Console.WriteLine($"{label} hotkey enabled but no key configured; skipping.");
+                return false;
+            }
+ 
             // Convert the configured key char to a virtual-key code. For
             // A-Z and 0-9 the VK code equals the ASCII code of the
-            // uppercase character, which is what we stored in
-            // _pushHotkeyKey.
-            if (string.IsNullOrEmpty(_pushHotkeyKey))
+            // uppercase character.
+            uint vk = key[0];
+ 
+            bool ok = RegisterHotKey(Handle, id, mods, vk);
+            string combo =
+                (ctrl ? "Ctrl+" : "")
+                + (shift ? "Shift+" : "")
+                + (alt ? "Alt+" : "")
+                + key;
+            if (ok)
             {
-                Console.WriteLine("push hotkey enabled but no key configured; skipping.");
-                return;
-            }
-
-            uint vk = _pushHotkeyKey[0];
-
-            _hotkeyRegistered = RegisterHotKey(Handle, HotkeyId, mods, vk);
-            if (_hotkeyRegistered)
-            {
-                string combo =
-                    (_pushHotkeyCtrl ? "Ctrl+" : "")
-                    + (_pushHotkeyShift ? "Shift+" : "")
-                    + (_pushHotkeyAlt ? "Alt+" : "")
-                    + _pushHotkeyKey;
-                Console.WriteLine($"push hotkey registered: {combo}");
+                Console.WriteLine($"{label} hotkey registered: {combo}");
             }
             else
             {
                 Console.WriteLine(
-                    "push hotkey registration failed (another app may own this combo).");
+                    $"{label} hotkey registration failed ({combo}); another app may own this combo.");
             }
+            return ok;
         }
 
         protected override void WndProc(ref Message m)
@@ -1208,15 +1296,30 @@ internal static class Program
                     Console.WriteLine($"Clipboard change handler error: {ex.Message}");
                 }
             }
-            else if (m.Msg == WmHotkey && m.WParam.ToInt32() == HotkeyId)
+            else if (m.Msg == WmHotkey)
             {
-                try
+                int hotkeyId = m.WParam.ToInt32();
+                if (hotkeyId == PushHotkeyId)
                 {
-                    _onHotkey?.Invoke();
+                    try
+                    {
+                        _onPushHotkey?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Clipboard push hotkey handler error: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
+                else if (hotkeyId == SwitchHotkeyId)
                 {
-                    Console.WriteLine($"Hotkey handler error: {ex.Message}");
+                    try
+                    {
+                        _onSwitchHotkey?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Switch hotkey handler error: {ex.Message}");
+                    }
                 }
             }
             base.WndProc(ref m);
@@ -1226,9 +1329,13 @@ internal static class Program
         {
             try
             {
-                if (_hotkeyRegistered)
+                if (_pushHotkeyRegistered)
                 {
-                    UnregisterHotKey(Handle, HotkeyId);
+                    UnregisterHotKey(Handle, PushHotkeyId);
+                }
+                if (_switchHotkeyRegistered)
+                {
+                    UnregisterHotKey(Handle, SwitchHotkeyId);
                 }
                 RemoveClipboardFormatListener(Handle);
             }

@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
         "baud": 921600,
     },
     "switching": {
+        "auto_edge_switch_enabled": True,
         "edge_arm_pixels": 2,
         "switch_push_pixels": 12,
         "switch_entry_margin_y": 32,
@@ -432,6 +433,38 @@ def release_all_inputs(active_serial: serial.Serial,
     for key_name in pressed_keys:
         write_line(active_serial, f"KEY NAME={key_name} STATE=UP")
 
+def release_inputs_for_switch(
+    old_active_target: str,
+    personal_serial: serial.Serial,
+    work_serial: serial.Serial,
+    left_button_down: bool,
+    right_button_down: bool,
+    middle_button_down: bool,
+    pressed_keys: set[str],
+) -> tuple[bool, bool, bool]:
+    """Release every held HID input on the OLD active target before a switch.
+
+    Without this, pressing 's' (or any other key) in an agent's console to
+    trigger a switch leaves that key held on the source Pico's HID -- so
+    Windows auto-repeats it indefinitely, which can re-fire the switch
+    trigger in a spam loop.
+
+    Returns (False, False, False) so callers can reset the three mouse-
+    button booleans inline. pressed_keys is cleared in place.
+
+    Call BEFORE flipping active_target to its new value, so "old active
+    target" is still resolvable to personal_serial vs work_serial.
+    """
+    old_serial = personal_serial if old_active_target == "P" else work_serial
+    release_all_inputs(
+        old_serial,
+        left_button_down,
+        right_button_down,
+        middle_button_down,
+        pressed_keys,
+    )
+    pressed_keys.clear()
+    return False, False, False
 
 def handle_keyboard_event(event, target_serial: serial.Serial, pressed_keys: set[str]) -> bool:
     key_name = ecodes.KEY.get(event.code)
@@ -584,15 +617,29 @@ def handle_serial_line(
     work_display: dict[str, int],
     personal_cursor: dict[str, int],
     work_cursor: dict[str, int],
-) -> None:
+) -> str | None:
+    """Process one serial line from an agent.
+
+    Returns "P" or "W" if the line was a SWITCH PEER request that should
+    trigger a manual switch in the main loop; else None. Cursor/display
+    state updates are applied here directly (mutate the dicts in place).
+    """
     if handle_display_line(line, personal_display, work_display):
-        return
+        return None
 
     if handle_cursor_line(line, personal_cursor, work_cursor):
-        return
+        return None
 
     if line.startswith("TARGET "):
-        return
+        return None
+
+    if line == "SWITCH PEER":
+        # source_name is "P" or "W"; switch to whichever side isn't the
+        # source. The agent doesn't have to know its peer's id -- it just
+        # asks for "the other one."
+        target = "W" if source_name == "P" else "P"
+        print(f"remote switch requested: {source_name} -> {target}")
+        return target
 
     if line.startswith("CLIPBOARD DATA "):
         destination_serial = work_serial if source_name == "P" else personal_serial
@@ -605,7 +652,7 @@ def handle_serial_line(
         # Log byte count so it's easy to see whether truncation happened
         # anywhere downstream.
         print(f"clipboard forwarded: {source_name} -> {destination_name} ({len(line)} chars)")
-        return
+        return None
 
     if line == "CLIPBOARD CLEAR":
         destination_serial = work_serial if source_name == "P" else personal_serial
@@ -613,9 +660,10 @@ def handle_serial_line(
 
         write_line(destination_serial, "CLIPBOARD CLEAR")
         print(f"clipboard CLEAR forwarded: {source_name} -> {destination_name}")
-        return
+        return None
 
     print(f"unhandled serial line from {source_name}: {line}")
+    return None
 
 
 def clamp(value: int, minimum: int, maximum: int) -> int:
@@ -624,6 +672,68 @@ def clamp(value: int, minimum: int, maximum: int) -> int:
 
 def send_cursor_set(ser: serial.Serial, x: int, y: int) -> None:
     write_line(ser, f"CURSOR SET X={x} Y={y}")
+
+
+def perform_manual_switch(
+    target: str,
+    personal_serial: serial.Serial,
+    work_serial: serial.Serial,
+    personal_display: dict[str, int],
+    work_display: dict[str, int],
+    personal_cursor: dict[str, int],
+    work_cursor: dict[str, int],
+    log_suffix: str = "",
+) -> float:
+    """Switch the active target to P or W using the target's last known
+    cursor position. Returns the new last_switch_time.
+
+    Used by manual triggers: stdin 'p'/'w' in the controller, and the
+    "SWITCH PEER" message from an agent. The auto edge-switch path uses
+    a different entry-point computation (preserve x offset, land near
+    the destination edge) and is NOT routed through here.
+
+    Mutates the target cursor dict in place (records the entry point that
+    was actually sent to the agent), and emits the broadcast.
+    """
+    if target == "P":
+        display = personal_display
+        cursor = personal_cursor
+        switch_serial = personal_serial
+        label = "PERSONAL"
+    elif target == "W":
+        display = work_display
+        cursor = work_cursor
+        switch_serial = work_serial
+        label = "WORK"
+    else:
+        raise ValueError(f"target must be 'P' or 'W' (got {target!r})")
+
+    if display["W"] > 0 and display["H"] > 0:
+        entry_x = clamp(
+            cursor["X"],
+            display["L"],
+            display["L"] + display["W"] - 1,
+        )
+        entry_y = clamp(
+            cursor["Y"],
+            display["T"],
+            display["T"] + display["H"] - 1,
+        )
+    else:
+        entry_x = 0
+        entry_y = 0
+
+    write_line(personal_serial, f"TARGET {target}")
+    write_line(work_serial, f"TARGET {target}")
+    send_cursor_set(switch_serial, entry_x, entry_y)
+
+    cursor["X"] = entry_x
+    cursor["Y"] = entry_y
+
+    full_label = f"{label} {log_suffix}".strip()
+    print(f"\n=== ACTIVE: {full_label} ===\n")
+
+    return time.monotonic()
 
 
 def main() -> int:
@@ -790,11 +900,11 @@ def main() -> int:
 
     p_to_w_push = 0
     w_to_p_push = 0
-    auto_switch_enabled = True
 
     # Switching parameters come from config.yaml (switching: section).
     # See controller/config.yaml for what each one does and recommended
     # bounds.
+    AUTO_EDGE_SWITCH_ENABLED = bool(config["switching"]["auto_edge_switch_enabled"])
     EDGE_ARM_PIXELS = config["switching"]["edge_arm_pixels"]
     SWITCH_PUSH_PIXELS = config["switching"]["switch_push_pixels"]
     SWITCH_ENTRY_MARGIN_Y = config["switching"]["switch_entry_margin_y"]
@@ -823,6 +933,7 @@ def main() -> int:
     print(f"personal: {personal_uart_path}")
     print(f"work:     {work_uart_path}")
     print("commands: p=personal, w=work, c=clipboard, q=quit")
+    print(f"auto edge-switch: {'enabled' if AUTO_EDGE_SWITCH_ENABLED else 'DISABLED'}")
     print("active target: P")
 
     try:
@@ -848,7 +959,7 @@ def main() -> int:
                     continue
 
                 source_name, line = queued.split("|", 1)
-                handle_serial_line(
+                switch_target = handle_serial_line(
                     source_name,
                     line,
                     personal_serial,
@@ -856,8 +967,42 @@ def main() -> int:
                     personal_display,
                     work_display,
                     personal_cursor,
-                    work_cursor
+                    work_cursor,
                 )
+
+                if switch_target is not None:
+                    # Remote-triggered manual switch (agent's 's' key or global
+                    # hotkey). Same code path as the stdin handler below, just
+                    # sourced from the wire instead. Honor the cooldown (defense
+                    # against held-hotkey ping-pong: each side's agent has the
+                    # hotkey registered, so a key held across the switch can fire
+                    # the destination's hotkey and bounce right back). Also ignore
+                    # if we're already on that target.
+                    cooling_down = time.monotonic() - last_switch_time < SWITCH_COOLDOWN_SECONDS
+                    if cooling_down:
+                        print(f"remote switch from {source_name} ignored (cooldown)")
+                    elif switch_target == active_target:
+                        print(f"remote switch from {source_name} ignored (already on {switch_target})")
+                    else:
+                        left_button_down, right_button_down, middle_button_down = release_inputs_for_switch(
+                            active_target, personal_serial, work_serial,
+                            left_button_down, right_button_down, middle_button_down,
+                            pressed_keys,
+                        )
+                        active_target = switch_target
+                        p_to_w_push = 0
+                        w_to_p_push = 0
+                        last_switch_time = perform_manual_switch(
+                            switch_target,
+                            personal_serial,
+                            work_serial,
+                            personal_display,
+                            work_display,
+                            personal_cursor,
+                            work_cursor,
+                            log_suffix=f"(REMOTE from {source_name})",
+                        )
+                        last_target_announce_time = last_switch_time
 
             # Wait for input events or serial lines
             input_fds = [d.fd for d in open_devices.values()]
@@ -869,68 +1014,46 @@ def main() -> int:
                 command = sys.stdin.readline().strip().lower()
 
                 if command == cmd_personal:
+                    if active_target != "P":
+                        left_button_down, right_button_down, middle_button_down = release_inputs_for_switch(
+                            active_target, personal_serial, work_serial,
+                            left_button_down, right_button_down, middle_button_down,
+                            pressed_keys,
+                        )
                     active_target = "P"
                     p_to_w_push = 0
                     w_to_p_push = 0
-
-                    if personal_display["W"] > 0 and personal_display["H"] > 0:
-                        entry_x = clamp(
-                            personal_cursor["X"],
-                            personal_display["L"],
-                            personal_display["L"] + personal_display["W"] - 1,
-                        )
-                        entry_y = clamp(
-                            personal_cursor["Y"],
-                            personal_display["T"],
-                            personal_display["T"] + personal_display["H"] - 1,
-                        )
-                    else:
-                        entry_x = 0
-                        entry_y = 0
-
-                    write_line(personal_serial, "TARGET P")
-                    write_line(work_serial, "TARGET P")
-
-                    send_cursor_set(personal_serial, entry_x, entry_y)
-
-                    personal_cursor["X"] = entry_x
-                    personal_cursor["Y"] = entry_y
-
-                    last_switch_time = time.monotonic()
+                    last_switch_time = perform_manual_switch(
+                        "P",
+                        personal_serial,
+                        work_serial,
+                        personal_display,
+                        work_display,
+                        personal_cursor,
+                        work_cursor,
+                    )
                     last_target_announce_time = last_switch_time
-                    print("\n=== ACTIVE: PERSONAL ===\n")
 
                 elif command == cmd_work:
+                    if active_target != "W":
+                        left_button_down, right_button_down, middle_button_down = release_inputs_for_switch(
+                            active_target, personal_serial, work_serial,
+                            left_button_down, right_button_down, middle_button_down,
+                            pressed_keys,
+                        )
                     active_target = "W"
                     p_to_w_push = 0
                     w_to_p_push = 0
-
-                    if work_display["W"] > 0 and work_display["H"] > 0:
-                        entry_x = clamp(
-                            work_cursor["X"],
-                            work_display["L"],
-                            work_display["L"] + work_display["W"] - 1,
-                        )
-                        entry_y = clamp(
-                            work_cursor["Y"],
-                            work_display["T"],
-                            work_display["T"] + work_display["H"] - 1,
-                        )
-                    else:
-                        entry_x = 0
-                        entry_y = 0
-
-                    write_line(personal_serial, "TARGET W")
-                    write_line(work_serial, "TARGET W")
-
-                    send_cursor_set(work_serial, entry_x, entry_y)
-
-                    work_cursor["X"] = entry_x
-                    work_cursor["Y"] = entry_y
-
-                    last_switch_time = time.monotonic()
+                    last_switch_time = perform_manual_switch(
+                        "W",
+                        personal_serial,
+                        work_serial,
+                        personal_display,
+                        work_display,
+                        personal_cursor,
+                        work_cursor,
+                    )
                     last_target_announce_time = last_switch_time
-                    print("\n=== ACTIVE: WORK ===\n")
 
                 elif command == cmd_clipboard:
                     target_serial = personal_serial if active_target == "P" else work_serial
@@ -956,7 +1079,6 @@ def main() -> int:
                     continue
                 for event in dev.read():
                     # Mouse REL events (movement + wheel)
-                    
                     if event.type == ecodes.EV_REL:
                         if event.code == ecodes.REL_X:
                             mouse_dx += event.value
@@ -993,7 +1115,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON LEFT=UP")
                                     write_line(target_serial, "MOUSE BUTTON LEFT=UP")
                             elif event.value == 2:
-                                pass # BTN auto-repeat; ignore and keep current state
+                                pass  # BTN auto-repeat; ignore and keep current state
 
                         elif event.code == ecodes.BTN_RIGHT:
                             if event.value == 1:
@@ -1007,7 +1129,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON RIGHT=UP")
                                     write_line(target_serial, "MOUSE BUTTON RIGHT=UP")
                             elif event.value == 2:
-                                pass # BTN auto-repeat; ignore and keep current state
+                                pass  # BTN auto-repeat; ignore and keep current state
 
                         elif event.code == ecodes.BTN_MIDDLE:
                             if event.value == 1:
@@ -1021,7 +1143,7 @@ def main() -> int:
                                     if _verbose: print("MOUSE BUTTON MIDDLE=UP")
                                     write_line(target_serial, "MOUSE BUTTON MIDDLE=UP")
                             elif event.value == 2:
-                                pass # BTN auto-repeat; ignore and keep current state
+                                pass  # BTN auto-repeat; ignore and keep current state
 
                         # Any other EV_KEY code (i.e., not BTN_LEFT/RIGHT/
                         # MIDDLE handled above) is a keyboard-shape event,
@@ -1066,70 +1188,84 @@ def main() -> int:
                                 cursor_x = personal_cursor["X"]
                                 cursor_y = personal_cursor["Y"]
 
-                                # Arm on Personal's bottom edge (absolute frame).
-                                # Suppress arming entirely during the post-switch
-                                # cooldown.
-                                #
-                                # Reset only when the user either leaves the edge
-                                # zone or actively pushes back (mouse_dy < 0).
-                                # A SYN cycle with horizontal jitter (mouse_dy == 0)
-                                # must NOT reset the counter; otherwise slow
-                                # diagonal motion never reaches threshold.
-                                if cooling_down:
-                                    p_to_w_push = 0
-                                elif p_w > 0 and p_h > 0:
-                                    bottom_arm = p_t + p_h - 1 - EDGE_ARM_PIXELS
-                                    was_armed = p_to_w_push > 0
-                                    in_zone = cursor_y >= bottom_arm
-
-                                    if not in_zone or mouse_dy < 0:
+                                # Edge arming + auto-switch are GATED on
+                                # the config flag. When disabled, the
+                                # cursor still tracks (needed for manual
+                                # switch entry-point preservation), but no
+                                # automatic edge switching occurs.
+                                if AUTO_EDGE_SWITCH_ENABLED:
+                                    # Arm on Personal's bottom edge.
+                                    # Suppress arming entirely during the
+                                    # post-switch cooldown.
+                                    #
+                                    # Reset only when the user either
+                                    # leaves the edge zone or actively
+                                    # pushes back (mouse_dy < 0). A SYN
+                                    # cycle with horizontal jitter
+                                    # (mouse_dy == 0) must NOT reset the
+                                    # counter; otherwise slow diagonal
+                                    # motion never reaches threshold.
+                                    if cooling_down:
                                         p_to_w_push = 0
-                                    elif mouse_dy > 0:
-                                        p_to_w_push += mouse_dy
-                                    # mouse_dy == 0: keep current push as-is
+                                    elif p_w > 0 and p_h > 0:
+                                        bottom_arm = p_t + p_h - 1 - EDGE_ARM_PIXELS
+                                        was_armed = p_to_w_push > 0
+                                        in_zone = cursor_y >= bottom_arm
 
-                                    # Only log the transition into armed state,
-                                    # not every event that keeps it armed.
-                                    if not was_armed and p_to_w_push > 0:
-                                        print(
-                                            f"AUTO P->W arming cursor_y={cursor_y} "
-                                            f"threshold={bottom_arm}"
+                                        if not in_zone or mouse_dy < 0:
+                                            p_to_w_push = 0
+                                        elif mouse_dy > 0:
+                                            p_to_w_push += mouse_dy
+                                        # mouse_dy == 0: keep current push as-is
+
+                                        # Only log the transition into
+                                        # armed state, not every event
+                                        # that keeps it armed.
+                                        if not was_armed and p_to_w_push > 0:
+                                            print(
+                                                f"AUTO P->W arming cursor_y={cursor_y} "
+                                                f"threshold={bottom_arm}"
+                                            )
+
+                                    if (p_to_w_push >= SWITCH_PUSH_PIXELS
+                                            and work_display["W"] > 0 and work_display["H"] > 0):
+                                        left_button_down, right_button_down, middle_button_down = release_inputs_for_switch(
+                                            active_target, personal_serial, work_serial,
+                                            left_button_down, right_button_down, middle_button_down,
+                                            pressed_keys,
                                         )
+                                        active_target = "W"
+                                        p_to_w_push = 0
+                                        w_to_p_push = 0
 
-                                if (p_to_w_push >= SWITCH_PUSH_PIXELS
-                                        and work_display["W"] > 0 and work_display["H"] > 0):
-                                    active_target = "W"
-                                    p_to_w_push = 0
-                                    w_to_p_push = 0
+                                        w_l = work_display["L"]
+                                        w_t = work_display["T"]
+                                        w_w = work_display["W"]
 
-                                    w_l = work_display["L"]
-                                    w_t = work_display["T"]
-                                    w_w = work_display["W"]
+                                        # Preserve X offset from the source monitor's
+                                        # left edge; clamp into the target monitor's
+                                        # horizontal bounds.
+                                        source_x_offset = cursor_x - p_l
+                                        entry_x = clamp(
+                                            w_l + source_x_offset,
+                                            w_l,
+                                            w_l + w_w - 1,
+                                        )
+                                        entry_y = w_t + SWITCH_ENTRY_MARGIN_Y
 
-                                    # Preserve X offset from the source monitor's
-                                    # left edge; clamp into the target monitor's
-                                    # horizontal bounds.
-                                    source_x_offset = cursor_x - p_l
-                                    entry_x = clamp(
-                                        w_l + source_x_offset,
-                                        w_l,
-                                        w_l + w_w - 1,
-                                    )
-                                    entry_y = w_t + SWITCH_ENTRY_MARGIN_Y
+                                        write_line(personal_serial, "TARGET W")
+                                        write_line(work_serial, "TARGET W")
+                                        send_cursor_set(work_serial, entry_x, entry_y)
 
-                                    write_line(personal_serial, "TARGET W")
-                                    write_line(work_serial, "TARGET W")
-                                    send_cursor_set(work_serial, entry_x, entry_y)
+                                        work_cursor["X"] = entry_x
+                                        work_cursor["Y"] = entry_y
 
-                                    work_cursor["X"] = entry_x
-                                    work_cursor["Y"] = entry_y
-
-                                    last_switch_time = time.monotonic()
-                                    last_target_announce_time = last_switch_time
-                                    print("\n=== ACTIVE: WORK (AUTO) ===\n")
-                                    mouse_dx = 0
-                                    mouse_dy = 0
-                                    continue
+                                        last_switch_time = time.monotonic()
+                                        last_target_announce_time = last_switch_time
+                                        print("\n=== ACTIVE: WORK (AUTO) ===\n")
+                                        mouse_dx = 0
+                                        mouse_dy = 0
+                                        continue
 
                             elif active_target == "W":
                                 w_l = work_display["L"]
@@ -1152,62 +1288,69 @@ def main() -> int:
                                 cursor_x = work_cursor["X"]
                                 cursor_y = work_cursor["Y"]
 
-                                # Arm on Work's top edge (absolute frame).
-                                # Same reset discipline as P->W: only reset
-                                # when leaving the edge zone or pushing back
-                                # downward. A SYN cycle with x-only motion
-                                # (mouse_dy == 0) must preserve the counter.
-                                if cooling_down:
-                                    w_to_p_push = 0
-                                elif w_w > 0 and w_h > 0:
-                                    top_arm = w_t + EDGE_ARM_PIXELS
-                                    was_armed = w_to_p_push > 0
-                                    in_zone = cursor_y <= top_arm
-
-                                    if not in_zone or mouse_dy > 0:
+                                if AUTO_EDGE_SWITCH_ENABLED:
+                                    # Arm on Work's top edge. Same reset
+                                    # discipline as P->W: only reset when
+                                    # leaving the edge zone or pushing
+                                    # back downward. A SYN cycle with
+                                    # x-only motion (mouse_dy == 0) must
+                                    # preserve the counter.
+                                    if cooling_down:
                                         w_to_p_push = 0
-                                    elif mouse_dy < 0:
-                                        w_to_p_push += -mouse_dy
-                                    # mouse_dy == 0: keep current push as-is
+                                    elif w_w > 0 and w_h > 0:
+                                        top_arm = w_t + EDGE_ARM_PIXELS
+                                        was_armed = w_to_p_push > 0
+                                        in_zone = cursor_y <= top_arm
 
-                                    if not was_armed and w_to_p_push > 0:
-                                        print(
-                                            f"AUTO W->P arming cursor_y={cursor_y} "
-                                            f"threshold={top_arm}"
+                                        if not in_zone or mouse_dy > 0:
+                                            w_to_p_push = 0
+                                        elif mouse_dy < 0:
+                                            w_to_p_push += -mouse_dy
+                                        # mouse_dy == 0: keep current push as-is
+
+                                        if not was_armed and w_to_p_push > 0:
+                                            print(
+                                                f"AUTO W->P arming cursor_y={cursor_y} "
+                                                f"threshold={top_arm}"
+                                            )
+
+                                    if (w_to_p_push >= SWITCH_PUSH_PIXELS
+                                            and personal_display["W"] > 0 and personal_display["H"] > 0):
+                                        left_button_down, right_button_down, middle_button_down = release_inputs_for_switch(
+                                            active_target, personal_serial, work_serial,
+                                            left_button_down, right_button_down, middle_button_down,
+                                            pressed_keys,
                                         )
+                                        active_target = "P"
+                                        p_to_w_push = 0
+                                        w_to_p_push = 0
 
-                                if (w_to_p_push >= SWITCH_PUSH_PIXELS
-                                        and personal_display["W"] > 0 and personal_display["H"] > 0):
-                                    active_target = "P"
-                                    p_to_w_push = 0
-                                    w_to_p_push = 0
+                                        p_l = personal_display["L"]
+                                        p_t = personal_display["T"]
+                                        p_w = personal_display["W"]
+                                        p_h = personal_display["H"]
 
-                                    p_l = personal_display["L"]
-                                    p_t = personal_display["T"]
-                                    p_w = personal_display["W"]
-                                    p_h = personal_display["H"]
+                                        source_x_offset = cursor_x - w_l
+                                        entry_x = clamp(
+                                            p_l + source_x_offset,
+                                            p_l,
+                                            p_l + p_w - 1,
+                                        )
+                                        entry_y = p_t + p_h - 1 - SWITCH_ENTRY_MARGIN_Y
 
-                                    source_x_offset = cursor_x - w_l
-                                    entry_x = clamp(
-                                        p_l + source_x_offset,
-                                        p_l,
-                                        p_l + p_w - 1,
-                                    )
-                                    entry_y = p_t + p_h - 1 - SWITCH_ENTRY_MARGIN_Y
+                                        write_line(personal_serial, "TARGET P")
+                                        write_line(work_serial, "TARGET P")
+                                        send_cursor_set(personal_serial, entry_x, entry_y)
 
-                                    write_line(personal_serial, "TARGET P")
-                                    write_line(work_serial, "TARGET P")
-                                    send_cursor_set(personal_serial, entry_x, entry_y)
+                                        personal_cursor["X"] = entry_x
+                                        personal_cursor["Y"] = entry_y
 
-                                    personal_cursor["X"] = entry_x
-                                    personal_cursor["Y"] = entry_y
-
-                                    last_switch_time = time.monotonic()
-                                    last_target_announce_time = last_switch_time
-                                    print("\n=== ACTIVE: PERSONAL (AUTO) ===\n")
-                                    mouse_dx = 0
-                                    mouse_dy = 0
-                                    continue
+                                        last_switch_time = time.monotonic()
+                                        last_target_announce_time = last_switch_time
+                                        print("\n=== ACTIVE: PERSONAL (AUTO) ===\n")
+                                        mouse_dx = 0
+                                        mouse_dy = 0
+                                        continue
 
                             target_serial = personal_serial if active_target == "P" else work_serial
                             if _verbose:
