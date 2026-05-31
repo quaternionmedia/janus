@@ -91,6 +91,12 @@ internal static class Program
                 "switch");
         }
 
+        if (Config.SwitchOnLock)
+        {
+            MessageWindow.RegisterLockListener(() => Triggers.SwitchToPeer("lock"));
+            Console.WriteLine("switch on workstation lock: enabled");
+        }
+
         Triggers.StartConsoleKeyReader(cts.Token);
 
         // ---- Reconnect loop ----------------------------------------------

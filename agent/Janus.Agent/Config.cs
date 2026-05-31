@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+namespace Janus.Agent;
+
 // Janus agent configuration. Loaded once at startup from appsettings.json
 // (in the executable's directory). All values default to the constants
 // below; missing JSON fields or a missing config file fall through to
@@ -47,8 +49,9 @@ internal static class Config
 
     // ---- Switch-to-peer triggers -----------------------------------------
     //
-    // Mirrors the clipboard-push pattern. Sends "SWITCH PEER" to the
-    // controller, which performs the switch to the OTHER side.
+    // A console key, an optional global hotkey, and an automatic trigger
+    // on workstation lock. All send the same "SWITCH PEER" verb to the
+    // controller.
 
     public static string SwitchConsoleKey { get; private set; } = "s";
     public static bool SwitchHotkeyEnabled { get; private set; } = false;
@@ -56,6 +59,12 @@ internal static class Config
     public static bool SwitchHotkeyShift { get; private set; } = true;
     public static bool SwitchHotkeyAlt { get; private set; } = false;
     public static string SwitchHotkeyKey { get; private set; } = "S";
+
+    // Switch to peer when this PC's workstation locks (Win+L, Ctrl+Alt+Del
+    // > Lock, idle autolock, screen-saver lock). Useful on the secondary
+    // PC so locking it bounces input back to the primary. Per-instance:
+    // set true on the secondary, false on the primary.
+    public static bool SwitchOnLock { get; private set; } = true;
 
     // ---- Load -------------------------------------------------------------
 
@@ -164,6 +173,10 @@ internal static class Config
         {
             SwitchHotkeyKey = section.HotkeyKey.Trim().ToUpperInvariant();
         }
+        if (section.OnLock.HasValue)
+        {
+            SwitchOnLock = section.OnLock.Value;
+        }
     }
 
     // ---- JSON deserialization shapes (private implementation detail) -----
@@ -220,6 +233,10 @@ internal static class Config
         public bool HotkeyShift { get; set; }
         public bool HotkeyAlt { get; set; }
         public string? HotkeyKey { get; set; }
+
+        // Nullable so we can distinguish "missing in JSON" (keep default
+        // true) from "explicitly set to false".
+        public bool? OnLock { get; set; }
     }
 }
 

@@ -88,6 +88,16 @@ internal static class MessageWindow
         _form?.RegisterClipboardListener(onChange);
     }
 
+    /// <summary>Subscribe to workstation-lock events
+    /// (WM_WTSSESSION_CHANGE with WTS_SESSION_LOCK). Only one listener
+    /// is supported; calling again replaces the previous callback.
+    /// Triggered for every lock path: Win+L, Ctrl+Alt+Del menu, idle
+    /// autolock, screen-saver lock.</summary>
+    public static void RegisterLockListener(Action onLock)
+    {
+        _form?.RegisterLockListener(onLock);
+    }
+
     /// <summary>Register a global hotkey (works from any focused window).
     /// Returns a handle for UnregisterHotkey, or -1 if registration failed
     /// (e.g. another app owns the combo). MOD_NOREPEAT is always applied
@@ -148,6 +158,9 @@ internal static class MessageWindow
         private readonly Dictionary<int, Action> _hotkeyCallbacks = new();
         private bool _clipboardListenerActive;
 
+        private Action? _onSessionLock;
+        private bool _sessionNotificationActive;
+
         public HiddenForm()
         {
             // Hidden, off-screen, zero opacity, never in taskbar. We're
@@ -168,6 +181,16 @@ internal static class MessageWindow
             {
                 Win32.AddClipboardFormatListener(Handle);
                 _clipboardListenerActive = true;
+            }
+        }
+
+        public void RegisterLockListener(Action onLock)
+        {
+            _onSessionLock = onLock;
+            if (!_sessionNotificationActive)
+            {
+                Win32.WTSRegisterSessionNotification(Handle, Win32.NotifyForThisSession);
+                _sessionNotificationActive = true;
             }
         }
 
@@ -246,6 +269,21 @@ internal static class MessageWindow
                     }
                 }
             }
+            else if (m.Msg == Win32.WmWtssessionChange)
+            {
+                int evt = m.WParam.ToInt32();
+                if (evt == Win32.WtsSessionLock)
+                {
+                    try
+                    {
+                        _onSessionLock?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Session lock handler error: {ex.Message}");
+                    }
+                }
+            }
             base.WndProc(ref m);
         }
 
@@ -263,6 +301,12 @@ internal static class MessageWindow
                 {
                     Win32.RemoveClipboardFormatListener(Handle);
                     _clipboardListenerActive = false;
+                }
+
+                if (_sessionNotificationActive)
+                {
+                    Win32.WTSUnRegisterSessionNotification(Handle);
+                    _sessionNotificationActive = false;
                 }
             }
             catch { }

@@ -2,11 +2,10 @@ using System.Runtime.InteropServices;
 
 namespace Janus.Agent.Platform;
 
-/// <summary>
-/// Native interop layer. Pure P/Invoke wrappers and the value types that
-/// appear in their signatures. No logic lives here -- callers translate
-/// raw Win32 calls into agent-level behavior.
-/// </summary>
+// Native interop layer. Pure P/Invoke wrappers and the value types that
+// appear in their signatures. No logic lives here -- callers translate
+// raw Win32 calls into agent-level behavior.
+
 internal static class Win32
 {
     // ---- Hotkey registration (user32) -------------------------------------
@@ -35,6 +34,24 @@ internal static class Win32
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern bool GetCursorPos(out POINT lpPoint);
+
+    // ---- Session lock/unlock notification (wtsapi32) ----------------------
+    //
+    // Subscribe a window to WM_WTSSESSION_CHANGE messages. wParam carries
+    // the event: 0x7 = lock, 0x8 = unlock (plus a handful for RDP /
+    // console connect-disconnect that we don't care about). Used by
+    // MessageWindow to fire a callback when the workstation locks.
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    internal static extern bool WTSRegisterSessionNotification(IntPtr hWnd, uint dwFlags);
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    internal static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+
+    internal const uint NotifyForThisSession = 0;
+    internal const int WmWtssessionChange = 0x02B1;
+    internal const int WtsSessionLock = 0x7;
+    internal const int WtsSessionUnlock = 0x8;
 
     // ---- Types used in the signatures above -------------------------------
 
