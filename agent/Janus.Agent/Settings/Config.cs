@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Janus.Agent;
+namespace Janus.Agent.Settings;
 
 // Janus agent configuration. Loaded once at startup from appsettings.json
 // (in the executable's directory). All values default to the constants

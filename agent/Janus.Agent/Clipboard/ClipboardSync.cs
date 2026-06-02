@@ -1,4 +1,5 @@
 using Janus.Agent.Platform;
+using Janus.Agent.Settings;
 using System.IO.Ports;
 using System.Text;
 

@@ -1,4 +1,5 @@
 using Janus.Agent.Clipboard;
+using Janus.Agent.Settings;
 using System.Globalization;
 using System.IO.Ports;
 

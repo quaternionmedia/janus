@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Janus.Agent.Pico</AssemblyName>
+    <AssemblyName>Janus.Agent</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

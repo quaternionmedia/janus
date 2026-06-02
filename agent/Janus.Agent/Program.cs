@@ -1,5 +1,7 @@
 ﻿using Janus.Agent.Clipboard;
+using Janus.Agent.Events;
 using Janus.Agent.Platform;
+using Janus.Agent.Settings;
 using System.IO.Ports;
 
 namespace Janus.Agent;
@@ -57,7 +59,7 @@ internal static class Program
         };
 
         Console.WriteLine($"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
-        Console.WriteLine($"port: {portName}");
+        Console.WriteLine($"serial port: {portName}");
         Console.WriteLine($"clipboard outbound mode: {Config.ClipboardOutboundMode}");
         Console.WriteLine($"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
             + (Config.ClipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
@@ -87,17 +89,17 @@ internal static class Program
                 Config.SwitchHotkeyShift,
                 Config.SwitchHotkeyAlt,
                 Config.SwitchHotkeyKey,
-                () => Triggers.SwitchToPeer("hotkey"),
+                () => Actions.SwitchToPeer("hotkey"),
                 "switch");
         }
 
         if (Config.SwitchOnLock)
         {
-            MessageWindow.RegisterLockListener(() => Triggers.SwitchToPeer("lock"));
+            MessageWindow.RegisterLockListener(() => Actions.SwitchToPeer("lock"));
             Console.WriteLine("switch on workstation lock: enabled");
         }
 
-        Triggers.StartConsoleKeyReader(cts.Token);
+        Actions.StartConsoleKeyReader(cts.Token);
 
         // ---- Reconnect loop ----------------------------------------------
 
@@ -113,6 +115,7 @@ internal static class Program
                     continue;
                 }
 
+                Console.WriteLine();
                 Console.WriteLine($"Serial connected: {portName}");
                 Serial.BeginSession(port, deviceId);
 

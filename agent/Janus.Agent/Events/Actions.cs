@@ -1,15 +1,16 @@
 using Janus.Agent.Clipboard;
 using Janus.Agent.Platform;
+using Janus.Agent.Settings;
 using System.IO.Ports;
 
-namespace Janus.Agent;
+namespace Janus.Agent.Events;
 
 // User-action dispatch layer. The actions themselves -- clipboard push,
 // peer switch -- are agnostic to how they're invoked; this module is
 // the routing for console keys and (via Program composition) global
 // hotkeys.
 
-internal static class Triggers
+internal static class Actions
 {
     // Single shared action for all manual switch triggers (console key,
     // global hotkey, future tray). Sends "SWITCH PEER" to the
