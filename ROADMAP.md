@@ -7,8 +7,7 @@
    - Config toggle for mouse-edge auto-switch (currently hardcoded on)
    - Tray menu (covered by #3)
    - Global hotkey (parallel to clipboard hotkey)
-
-FIGURE OUT A WAY TO SWITCH BACK TO PERSONAL IF I LOCK WORK PC. Maybe config value for "SwitchOnLock" which will trigger switch immediately and then work pc will continue to do lock? Well, but registering hotkey overrides the default func... What if I hold windows key + alt + shift + L? Can it trigger on alt+shift+L and win+L still work in tandem? Ideally we'd be able to react to pc locking in time and could avoid hotkey.
+   - Implement switch on lock/shutdown/reboot/logout
 
 3. Tray icon (expanded scope):
    - Notification on large clipboard receive
@@ -38,4 +37,4 @@ FIGURE OUT A WAY TO SWITCH BACK TO PERSONAL IF I LOCK WORK PC. Maybe config valu
 
 13. Benchmark / metrics / stress test
 
-14. On-device error_log.txt — deferred
+14. Agent side Pico log capture (stream over CDC, persist on Windows)

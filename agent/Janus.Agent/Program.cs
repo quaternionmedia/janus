@@ -2,6 +2,7 @@
 using Janus.Agent.Events;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
+using Janus.Agent.Tray;
 using System.IO.Ports;
 
 namespace Janus.Agent;
@@ -13,7 +14,9 @@ namespace Janus.Agent;
 //   ClipboardText   -- text I/O + hash dedup
 //   MessageWindow   -- STA hidden window backing clipboard listener
 //                      and global hotkey registration
-//   Triggers        -- console-key + hotkey dispatch into actions
+//   Actions         -- console-key + hotkey dispatch into actions
+//   ConsoleWindow   -- hide/show the agent's own console + tool-window style
+//   TrayIcon        -- NotifyIcon + context menu, primary user-facing UI
 //   Config          -- appsettings.json -> static properties
 //   Win32           -- P/Invoke surface
 //
@@ -47,6 +50,18 @@ internal static class Program
             Console.WriteLine("Missing COM port. Example: P COM9");
             return;
         }
+
+        // Apply tool-window style + hide console BEFORE any other startup
+        // logging. ApplyToolWindowStyle() flips WS_EX_TOOLWINDOW so the
+        // window won't appear in the taskbar even when later shown via
+        // the tray menu. Hide() makes it invisible immediately so the
+        // user doesn't see a console flash at process start.
+        //
+        // Console.WriteLine still works against a hidden console -- the
+        // text accumulates in the console buffer and is visible when the
+        // user clicks "Show window" from the tray.
+        ConsoleWindow.ApplyToolWindowStyle();
+        ConsoleWindow.Hide();
 
         Config.Load();
 
@@ -100,6 +115,12 @@ internal static class Program
         }
 
         Actions.StartConsoleKeyReader(cts.Token);
+
+        // TrayIcon hooks onto MessageWindow's STA thread; must be
+        // started AFTER MessageWindow.Start(). Quit menu item calls
+        // cts.Cancel, which unwinds this Main exactly the same way
+        // Ctrl+C in the console would.
+        TrayIcon.Start(deviceId, () => cts.Cancel());
 
         // ---- Reconnect loop ----------------------------------------------
 
@@ -170,6 +191,10 @@ internal static class Program
         finally
         {
             Console.WriteLine("Stopping agent.");
+            // Tear down UI before the message pump. TrayIcon.Stop()
+            // marshals onto MessageWindow's STA thread, so the pump
+            // must still be running when we call it.
+            TrayIcon.Stop();
             MessageWindow.Stop();
         }
     }

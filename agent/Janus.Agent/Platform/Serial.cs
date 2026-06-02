@@ -56,6 +56,28 @@ internal static class Serial
         ActiveDeviceId = null;
     }
 
+    /// <summary>Request a serial reconnect by closing the current port.
+    /// The main reconnect loop sees ActivePort go null + the receive loop
+    /// erroring out, iterates, and reopens via TryOpenPort. Safe to call
+    /// from any thread, including when no port is open (no-op in that
+    /// case). Used by the tray menu's Reconnect item.</summary>
+    public static void RequestReconnect()
+    {
+        SerialPort? port = ActivePort;
+        if (port is null) return;
+
+        try
+        {
+            port.Close();
+        }
+        catch
+        {
+            // The reconnect loop's finally will Dispose anyway; swallow
+            // here so a transient error doesn't bubble into the tray
+            // click handler.
+        }
+    }
+    
     // ---- Port open ----------------------------------------------------
 
     public static SerialPort? TryOpenPort(string portName)
