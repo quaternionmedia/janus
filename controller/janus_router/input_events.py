@@ -16,10 +16,17 @@ it has to coordinate with routing's auto-edge-switch logic.
                                KEY NAME=... STATE=... line
   * `InputState`             — dataclass grouping per-tick mutable state
                                (REL accumulators + button-down bools +
-                               pressed_keys), held for the lifetime of
-                               the main event loop
+                               pressed_keys + suppressed_keys), held for
+                               the lifetime of the main event loop
   * `process_event`          — dispatcher for one EV_REL or EV_KEY event;
-                               mutates InputState in place
+                               mutates InputState in place. Returns the
+                               target letter ("P"/"W") when a force-
+                               switch hotkey combo is detected so the
+                               caller can perform_manual_switch.
+  * `set_force_switch_combos` — register Pi-side hotkey combos that
+                                bypass the active target and switch
+                                routing directly. Trigger keys are
+                                suppressed (never forwarded).
 """
 import serial
 
@@ -32,6 +39,17 @@ from janus_router.serial_io import write_line
 
 _verbose = False
 
+# Pi-side force-switch hotkey combos. Maps each TRIGGER key (e.g.
+# "KEY_P") to a (required_modifiers, target_letter) tuple. When
+# process_event sees a KEY DOWN whose name matches a configured
+# trigger AND state.pressed_keys is a superset of required_modifiers,
+# the event is suppressed (not forwarded) and the target letter is
+# bubbled up to main so it can call routing.perform_manual_switch.
+#
+# Populated by set_force_switch_combos() at startup. Empty by default
+# means "no Pi-side force-switch hotkeys configured."
+_force_switch_combos: dict[str, tuple[frozenset[str], str]] = {}
+
 
 def set_verbose(value: bool) -> None:
     """Enable / disable per-event verbose logging for the input-event
@@ -39,6 +57,28 @@ def set_verbose(value: bool) -> None:
     handle_keyboard_event was never verbose."""
     global _verbose
     _verbose = bool(value)
+
+
+def set_force_switch_combos(
+    combos: dict[str, tuple[frozenset[str], str]],
+) -> None:
+    """Configure Pi-side force-switch hotkey combos. Each entry maps a
+    trigger key name (e.g. "KEY_P") to a tuple of:
+      * required modifiers as a frozenset of key names (e.g.
+        frozenset({"KEY_RIGHTCTRL", "KEY_RIGHTALT"}))
+      * target letter ("P" or "W")
+
+    When process_event sees the trigger key's initial DOWN with every
+    required modifier currently held, it suppresses the event AND
+    returns the target letter so main can perform the switch.
+    Subsequent repeat/UP events for the same trigger are also
+    suppressed (tracked via InputState.suppressed_keys) so auto-repeat
+    after the switch doesn't spam the new target with the trigger key.
+
+    Pass an empty dict to disable force-switch entirely.
+    """
+    global _force_switch_combos
+    _force_switch_combos = dict(combos)
 
 
 def log_unhandled_mouse_key(event):
@@ -171,6 +211,13 @@ class InputState:
     pressed_keys is the same dedup idea for keyboard keys, populated
     inside handle_keyboard_event.
 
+    suppressed_keys tracks keys whose initial DOWN was consumed by a
+    Pi-side force-switch hotkey. While a key is in this set, its
+    auto-repeat (value=2) and final UP (value=0) are also suppressed
+    so the trigger keystroke (e.g. KEY_P / KEY_W) never reaches any
+    agent. Names enter the set inside _check_force_switch on combo
+    match, leave it when the UP arrives.
+
     A single InputState lives for the whole event loop -- created
     before the while loop, mutated in place by process_event and by
     the SYN_REPORT branch.
@@ -183,12 +230,25 @@ class InputState:
     right_button_down: bool = False
     middle_button_down: bool = False
     pressed_keys: set[str] = field(default_factory=set)
+    suppressed_keys: set[str] = field(default_factory=set)
 
 
-def process_event(event, state: InputState, target_serial: serial.Serial) -> None:
+def process_event(
+    event,
+    state: InputState,
+    target_serial: serial.Serial,
+) -> str | None:
     """Dispatch one evdev event by type. EV_REL events update the
     motion / wheel accumulators on `state`; EV_KEY events translate to
     a wire MOUSE BUTTON or KEY message.
+
+    Returns the target letter ("P" or "W") when a Pi-side force-switch
+    hotkey combo (e.g. Right Ctrl + Right Alt + P) was detected on the
+    initial DOWN of the trigger key. The trigger event is suppressed
+    (not forwarded) and the caller must invoke
+    routing.perform_manual_switch with the returned target. Returns
+    None for all other events, including suppressed repeat/UP events
+    of a previously-triggered combo.
 
     EV_SYN/SYN_REPORT events are NOT handled here -- they belong in
     main's loop because the flush coordinates with routing's
@@ -196,8 +256,10 @@ def process_event(event, state: InputState, target_serial: serial.Serial) -> Non
     """
     if event.type == ecodes.EV_REL:
         _accumulate_motion(event, state)
+        return None
     elif event.type == ecodes.EV_KEY:
-        _handle_key_event(event, state, target_serial)
+        return _handle_key_event(event, state, target_serial)
+    return None
 
 
 def _accumulate_motion(event, state: InputState) -> None:
@@ -218,7 +280,11 @@ def _accumulate_motion(event, state: InputState) -> None:
         log_unhandled_mouse_rel(event)
 
 
-def _handle_key_event(event, state: InputState, target_serial: serial.Serial) -> None:
+def _handle_key_event(
+    event,
+    state: InputState,
+    target_serial: serial.Serial,
+) -> str | None:
     """Mouse buttons are dispatched through `_emit_button` with DOWN/UP
     dedup. Anything else (any EV_KEY that isn't a BTN_LEFT/RIGHT/MIDDLE)
     is treated as a keyboard-shape event, regardless of which device
@@ -226,17 +292,34 @@ def _handle_key_event(event, state: InputState, target_serial: serial.Serial) ->
     that come over a separate "if02-event-kbd" node, or combo
     receivers like the Logitech K400 reporting keystrokes on the mouse
     node, get forwarded as keystrokes.
+
+    Returns the force-switch target letter when a configured combo
+    triggers on this event; None otherwise.
     """
     code = event.code
     if code == ecodes.BTN_LEFT:
         _emit_button(event, target_serial, state, "left_button_down", "LEFT")
+        return None
     elif code == ecodes.BTN_RIGHT:
         _emit_button(event, target_serial, state, "right_button_down", "RIGHT")
+        return None
     elif code == ecodes.BTN_MIDDLE:
         _emit_button(event, target_serial, state, "middle_button_down", "MIDDLE")
-    else:
-        if not handle_keyboard_event(event, target_serial, state.pressed_keys):
-            log_unhandled_mouse_key(event)
+        return None
+
+    # Keyboard-shape event. Check force-switch hotkey first. If the
+    # event is part of a combo (trigger DOWN, or repeat/UP of a
+    # previously-triggered key), suppress it -- don't forward to any
+    # agent. Only the initial DOWN bubbles a non-None target up to
+    # main; suppressed repeat/UP events return None but the suppress
+    # flag still keeps them from reaching handle_keyboard_event.
+    suppress, switch_target = _check_force_switch(event, state)
+    if suppress:
+        return switch_target
+
+    if not handle_keyboard_event(event, target_serial, state.pressed_keys):
+        log_unhandled_mouse_key(event)
+    return None
 
 
 def _emit_button(
@@ -267,3 +350,75 @@ def _emit_button(
                 print(f"MOUSE BUTTON {wire_name}=UP")
             write_line(target_serial, f"MOUSE BUTTON {wire_name}=UP")
     # event.value == 2: BTN auto-repeat; ignore.
+
+
+def _check_force_switch(
+    event,
+    state: InputState,
+) -> tuple[bool, str | None]:
+    """Determine whether `event` is part of a Pi-side force-switch
+    hotkey combo and should be suppressed from forwarding.
+
+    Returns (suppress, switch_target):
+      * (False, None)         -- not a combo event; caller forwards
+                                  normally via handle_keyboard_event
+      * (True,  "P" | "W")    -- initial DOWN of a trigger key with
+                                  all required modifiers currently
+                                  held; suppress the event AND
+                                  perform the switch
+      * (True,  None)         -- repeat (value=2) or UP (value=0) of
+                                  a previously-triggered key; suppress
+                                  only. UP also removes the key from
+                                  state.suppressed_keys.
+
+    The trigger key is NEVER added to state.pressed_keys -- it's
+    intercepted before handle_keyboard_event sees it.
+    """
+    # Skip non-trigger combos entirely if none are configured.
+    if not _force_switch_combos and not state.suppressed_keys:
+        return (False, None)
+
+    # Resolve the key name (matches handle_keyboard_event's logic for
+    # multi-name codes). If the name can't be resolved or doesn't start
+    # with KEY_, this isn't a candidate for force-switch handling.
+    key_name = ecodes.KEY.get(event.code)
+    if isinstance(key_name, (list, tuple)):
+        resolved = None
+        for n in key_name:
+            if isinstance(n, str) and n.startswith("KEY_"):
+                resolved = n
+                break
+        key_name = resolved
+    if not isinstance(key_name, str) or not key_name.startswith("KEY_"):
+        return (False, None)
+
+    if event.value == 1:
+        # Initial DOWN. Check whether this key is a configured trigger
+        # AND every required modifier is currently held.
+        combo = _force_switch_combos.get(key_name)
+        if combo is None:
+            return (False, None)
+        required_modifiers, target = combo
+        if not required_modifiers.issubset(state.pressed_keys):
+            return (False, None)
+        # Match: mark this key as suppressed so its repeat and UP
+        # events are also dropped.
+        state.suppressed_keys.add(key_name)
+        return (True, target)
+
+    if event.value == 2:
+        # Auto-repeat. Suppress if this key was the trigger of an
+        # active force-switch.
+        if key_name in state.suppressed_keys:
+            return (True, None)
+        return (False, None)
+
+    if event.value == 0:
+        # UP. If previously suppressed, drop the UP and forget the
+        # key. Otherwise pass through to normal handling.
+        if key_name in state.suppressed_keys:
+            state.suppressed_keys.discard(key_name)
+            return (True, None)
+        return (False, None)
+
+    return (False, None)

@@ -12,8 +12,9 @@ namespace Janus.Agent;
 //   Serial          -- wire I/O, receive loop, display/cursor send
 //   ClipboardSync   -- inbound verbs, monitor callback, manual push
 //   ClipboardText   -- text I/O + hash dedup
-//   MessageWindow   -- STA hidden window backing clipboard listener
-//                      and global hotkey registration
+//   MessageWindow   -- STA hidden window backing clipboard listener,
+//                      global hotkey registration, session-lock +
+//                      system power-event notification
 //   Actions         -- console-key + hotkey dispatch into actions
 //   ConsoleWindow   -- hide/show the agent's own console + tool-window style
 //   TrayIcon        -- NotifyIcon + context menu, primary user-facing UI
@@ -112,6 +113,12 @@ internal static class Program
         {
             MessageWindow.RegisterLockListener(() => Actions.SwitchToPeer("lock"));
             Console.WriteLine("switch on workstation lock: enabled");
+        }
+
+        if (Config.SwitchOnShutdown)
+        {
+            MessageWindow.RegisterPowerEventListener(() => Actions.SwitchToPeer("shutdown"));
+            Console.WriteLine("switch on shutdown/suspend: enabled");
         }
 
         Actions.StartConsoleKeyReader(cts.Token);

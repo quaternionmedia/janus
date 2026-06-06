@@ -1,3 +1,5 @@
+using Microsoft.Win32;
+
 namespace Janus.Agent.Platform;
 
 // Janus agent's STA + message-only window. Hosts a hidden WinForms
@@ -6,17 +8,28 @@ namespace Janus.Agent.Platform;
 // the events they care about; the window dispatches each WndProc
 // message to the matching callback(s).
 //
-// Why this lives in Platform: clipboard listening and global hotkeys
-// both require a window handle and an STA message pump. Centralizing
-// the infrastructure here keeps the clipboard module focused on
-// clipboard logic and lets future subsystems (tray icon, custom
-// shortcuts) plug in without owning their own STA thread.
+// Power events (shutdown / logoff / suspend / hibernate) come through
+// Microsoft.Win32.SystemEvents rather than WndProc. SystemEvents owns
+// its own message pump internally, so we just subscribe + delegate;
+// the events fire on a SystemEvents-internal thread.
+//
+// Why this lives in Platform: clipboard listening, global hotkeys,
+// session-lock notification, and system power events all need OS-level
+// subscriptions. Centralizing the infrastructure here keeps the
+// individual feature modules focused on their own logic and lets future
+// subsystems plug in without owning their own STA thread.
 
 internal static class MessageWindow
 {
     private static HiddenForm? _form;
     private static Thread? _thread;
     private static readonly ManualResetEventSlim _ready = new(initialState: false);
+
+    // SystemEvents subscriptions. Held so we can unsubscribe on Stop()
+    // to avoid leaking handlers across agent restarts.
+    private static SessionEndingEventHandler? _onSessionEnding;
+    private static PowerModeChangedEventHandler? _onPowerModeChanged;
+    private static Action? _powerEventCallback;
 
     /// <summary>True once the underlying window handle exists and the form
     /// is still alive.</summary>
@@ -60,9 +73,26 @@ internal static class MessageWindow
     }
 
     /// <summary>Close the window, end the message pump, and join the STA
-    /// thread. Safe to call if Start() was never called.</summary>
+    /// thread. Also unsubscribes any SystemEvents handlers registered
+    /// via RegisterPowerEventListener. Safe to call if Start() was never
+    /// called.</summary>
     public static void Stop()
     {
+        // Unsubscribe SystemEvents handlers FIRST. SystemEvents holds
+        // process-wide state; leaking a handler would keep a closure
+        // reference alive across restarts.
+        if (_onSessionEnding is not null)
+        {
+            try { SystemEvents.SessionEnding -= _onSessionEnding; } catch { }
+            _onSessionEnding = null;
+        }
+        if (_onPowerModeChanged is not null)
+        {
+            try { SystemEvents.PowerModeChanged -= _onPowerModeChanged; } catch { }
+            _onPowerModeChanged = null;
+        }
+        _powerEventCallback = null;
+
         var form = _form;
         if (form is null) return;
         try
@@ -96,6 +126,65 @@ internal static class MessageWindow
     public static void RegisterLockListener(Action onLock)
     {
         _form?.RegisterLockListener(onLock);
+    }
+
+    /// <summary>Subscribe to system power-down events: shutdown, restart,
+    /// logoff (via SessionEnding) plus sleep / hibernate (via
+    /// PowerModeChanged with PowerModes.Suspend). The callback fires on
+    /// a SystemEvents-internal worker thread, not the MessageWindow STA
+    /// thread, so the callback must be thread-safe.
+    ///
+    /// Windows gives the process a few seconds during SessionEnding
+    /// before forcibly terminating; the callback should do its work
+    /// quickly. Calling more than once replaces the previous callback.
+    /// </summary>
+    public static void RegisterPowerEventListener(Action onPowerEvent)
+    {
+        // If already registered, unwire the previous handlers first so
+        // we don't double-fire.
+        if (_onSessionEnding is not null)
+        {
+            try { SystemEvents.SessionEnding -= _onSessionEnding; } catch { }
+            _onSessionEnding = null;
+        }
+        if (_onPowerModeChanged is not null)
+        {
+            try { SystemEvents.PowerModeChanged -= _onPowerModeChanged; } catch { }
+            _onPowerModeChanged = null;
+        }
+
+        _powerEventCallback = onPowerEvent;
+
+        _onSessionEnding = (_, e) =>
+        {
+            // e.Reason is Logoff or SystemShutdown. We don't
+            // distinguish: both are "this PC is going away soon."
+            try
+            {
+                _powerEventCallback?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Session-ending handler error: {ex.Message}");
+            }
+        };
+        SystemEvents.SessionEnding += _onSessionEnding;
+
+        _onPowerModeChanged = (_, e) =>
+        {
+            // Only Suspend is a "going away" event. Resume and
+            // StatusChange aren't relevant for switch-on-shutdown.
+            if (e.Mode != PowerModes.Suspend) return;
+            try
+            {
+                _powerEventCallback?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Power-mode handler error: {ex.Message}");
+            }
+        };
+        SystemEvents.PowerModeChanged += _onPowerModeChanged;
     }
 
     /// <summary>Register a global hotkey (works from any focused window).

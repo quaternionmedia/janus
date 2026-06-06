@@ -59,6 +59,9 @@ DEFAULT_CONFIG = {
         "switch_entry_margin_y": 32,
         "switch_cooldown_seconds": 0.15,
         "target_announce_interval_seconds": 2.0,
+        "dead_peer_threshold_seconds": 10.0,
+        "dead_peer_switch_cooldown_seconds": 30.0,
+        "dead_peer_home_base": "P",
     },
     "commands": {
         "personal": "p",

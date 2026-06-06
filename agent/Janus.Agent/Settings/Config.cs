@@ -49,8 +49,9 @@ internal static class Config
 
     // ---- Switch-to-peer triggers -----------------------------------------
     //
-    // A console key, an optional global hotkey, and an automatic trigger
-    // on workstation lock. All send the same "SWITCH PEER" verb to the
+    // Manual: a console key, an optional global hotkey.
+    // Automatic: workstation lock, and/or shutdown / restart / logoff /
+    // sleep / hibernate. All send the same "SWITCH PEER" verb to the
     // controller.
 
     public static string SwitchConsoleKey { get; private set; } = "s";
@@ -65,6 +66,15 @@ internal static class Config
     // PC so locking it bounces input back to the primary. Per-instance:
     // set true on the secondary, false on the primary.
     public static bool SwitchOnLock { get; private set; } = true;
+
+    // Switch to peer when this PC starts shutting down, restarting,
+    // logging off, suspending, or hibernating. Same per-instance pattern
+    // as SwitchOnLock: typically true on the secondary, false on the
+    // primary. Catches the cases SwitchOnLock misses (sudden Windows
+    // Update reboots, planned shutdowns, sleep events). The agent has
+    // a few seconds during these events to issue the SWITCH PEER before
+    // Windows terminates the process.
+    public static bool SwitchOnShutdown { get; private set; } = true;
 
     // ---- Load -------------------------------------------------------------
 
@@ -177,6 +187,10 @@ internal static class Config
         {
             SwitchOnLock = section.OnLock.Value;
         }
+        if (section.OnShutdown.HasValue)
+        {
+            SwitchOnShutdown = section.OnShutdown.Value;
+        }
     }
 
     // ---- JSON deserialization shapes (private implementation detail) -----
@@ -234,9 +248,10 @@ internal static class Config
         public bool HotkeyAlt { get; set; }
         public string? HotkeyKey { get; set; }
 
-        // Nullable so we can distinguish "missing in JSON" (keep default
-        // true) from "explicitly set to false".
+        // Nullable so we can distinguish "missing in JSON" (keep default)
+        // from "explicitly set to false".
         public bool? OnLock { get; set; }
+        public bool? OnShutdown { get; set; }
     }
 }
 

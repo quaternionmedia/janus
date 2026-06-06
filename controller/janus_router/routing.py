@@ -1,6 +1,6 @@
 """Routing state and edge-detection logic for the Janus controller.
 
-Owns the "which side is currently receiving input" state machine. Three
+Owns the "which side is currently receiving input" state machine. Four
 ways to switch:
 
   * Manual: stdin 'p' / 'w' in the Pi console, or a remote SWITCH PEER
@@ -12,6 +12,34 @@ ways to switch:
     `switch_push_pixels` of push, `handle_mouse_motion` flips the
     active target and lands the cursor near the destination edge with
     the source X offset preserved.
+
+  * Pi-side force-switch hotkey (Right Ctrl + Right Alt + P/W,
+    detected in input_events): caller invokes `perform_manual_switch`
+    directly with a (FORCE Right Ctrl+Right Alt) log suffix.
+
+  * Dead-peer auto-switch: when the active target's agent has gone
+    silent past `dead_peer_threshold_seconds` AND the active is NOT
+    the configured `dead_peer_home_base` AND the home base itself is
+    alive, `check_dead_peer_switch` returns the home base so main can
+    flip routing there. Heartbeats are any inbound line from the agent
+    (TARGET echoes every ~2s, CURSOR keepalives, DISPLAY refreshes).
+    Refreshed via `record_message_from`, called from inbound.py's
+    `handle_serial_line` on every line received.
+
+    The home_base asymmetry is intentional: if you're on home base
+    and home base dies, "switching to the other side" doesn't help --
+    home base dying is a "fix home base" event, not a "use the other
+    side" event. Dead-peer auto-switch is a one-way fallback toward
+    home base only. The other switch paths (manual, force, edge-auto)
+    are unaffected by home_base and can still move you off home base
+    normally.
+
+    Covers failure modes that bypass the agent's OnShutdown signal:
+    BSOD / kernel panic, hard power loss, USB disconnect between
+    Pico and host, agent process force-killed without the OS getting
+    a SessionEnding notification. After firing, the next auto-switch
+    is locked out for `dead_peer_switch_cooldown_seconds` to prevent
+    rapid flipping.
 
 State exposed to inbound.py for direct mutation:
   * personal_cursor / work_cursor: last-known cursor per side
@@ -51,6 +79,15 @@ _p_to_w_push: int = 0
 _w_to_p_push: int = 0
 _last_switch_time: float = 0.0
 
+# Dead-peer tracking. _last_seen records the monotonic time we last
+# received ANY line from each agent. record_message_from() updates
+# these; check_dead_peer_switch() reads them. Default 0.0 means "never
+# seen" -- at startup, init_dead_peer_tracking() sets them to
+# (now + grace) so the detector doesn't fire before agents have had
+# a chance to connect.
+_last_seen: dict[str, float] = {"P": 0.0, "W": 0.0}
+_last_dead_peer_switch_time: float = 0.0
+
 
 # ---- Config (populated by configure()) --------------------------------------
 
@@ -59,6 +96,14 @@ _edge_arm_pixels: int = 2
 _switch_push_pixels: int = 12
 _switch_entry_margin_y: int = 32
 _switch_cooldown_seconds: float = 0.15
+_dead_peer_threshold_seconds: float = 10.0
+_dead_peer_switch_cooldown_seconds: float = 30.0
+
+# Home-base side for dead-peer auto-switch. Asymmetric by design:
+# auto-switch never moves AWAY from home base. None disables dead-peer
+# auto-switch entirely. Validated to "P" / "W" / None in configure();
+# other values warn and disable.
+_dead_peer_home_base: str | None = "P"
 _verbose: bool = False
 
 
@@ -75,11 +120,134 @@ def configure(switching_config: dict) -> None:
     after load_config()."""
     global _auto_edge_switch_enabled, _edge_arm_pixels, _switch_push_pixels
     global _switch_entry_margin_y, _switch_cooldown_seconds
+    global _dead_peer_threshold_seconds, _dead_peer_switch_cooldown_seconds
+    global _dead_peer_home_base
     _auto_edge_switch_enabled = bool(switching_config["auto_edge_switch_enabled"])
     _edge_arm_pixels = switching_config["edge_arm_pixels"]
     _switch_push_pixels = switching_config["switch_push_pixels"]
     _switch_entry_margin_y = switching_config["switch_entry_margin_y"]
     _switch_cooldown_seconds = switching_config["switch_cooldown_seconds"]
+    _dead_peer_threshold_seconds = switching_config["dead_peer_threshold_seconds"]
+    _dead_peer_switch_cooldown_seconds = switching_config[
+        "dead_peer_switch_cooldown_seconds"
+    ]
+
+    # Validate dead_peer_home_base. Accept "P", "W", or None; reject
+    # anything else with a loud warning and disable the feature so the
+    # controller doesn't silently behave unexpectedly.
+    raw = switching_config.get("dead_peer_home_base")
+    if raw in ("P", "W"):
+        _dead_peer_home_base = raw
+    elif raw is None or raw == "":
+        _dead_peer_home_base = None
+    else:
+        print(
+            f"warning: switching.dead_peer_home_base must be 'P', 'W', or null "
+            f"(got {raw!r}); disabling dead-peer auto-switch."
+        )
+        _dead_peer_home_base = None
+
+
+def init_dead_peer_tracking(grace_seconds: float = 30.0) -> None:
+    """Seed the last-seen timestamps with (now + grace_seconds) so the
+    dead-peer detector treats both peers as alive for the first
+    `grace_seconds` even if no agent messages have arrived yet.
+
+    Without this, the module-level default of 0.0 combined with a
+    typical CLOCK_MONOTONIC value in the millions makes both peers
+    look "dead since the dawn of time" at startup. The grace window
+    gives the agents time to connect and emit their first DISPLAY /
+    CURSOR / TARGET echo before the detector starts judging silence.
+
+    Call once at startup, after routing.init() and routing.configure().
+    """
+    future = time.monotonic() + grace_seconds
+    _last_seen["P"] = future
+    _last_seen["W"] = future
+
+
+def record_message_from(source: str) -> None:
+    """Refresh the last-seen timestamp for an agent. Called from
+    inbound.handle_serial_line on EVERY line that arrived from an
+    agent, including lines we don't recognize -- any byte stream
+    coming through proves the agent process is alive."""
+    if source in _last_seen:
+        _last_seen[source] = time.monotonic()
+
+
+def check_dead_peer_switch() -> str | None:
+    """Decide whether to auto-switch routing because the active peer
+    has gone silent. Returns the home-base letter ("P" or "W") if main
+    should switch there; None otherwise.
+
+    Behavior is ASYMMETRIC by design. The rule is:
+
+      "If the active target dies AND active is not the home base AND
+       the home base is itself alive, fall back to home base."
+
+    Practical reading with home_base = "P":
+      * On Work, Work dies, Personal alive -> auto-switch to Personal.
+      * On Personal, Personal dies, Work alive -> do NOTHING. Personal
+        dying is a "fix Personal" event, not "use Work." Stay put.
+      * On Work, Work dies, Personal also dead -> nothing useful to do.
+      * On Personal, Personal is alive -> active is alive, no action.
+
+    Important scope: ONLY this function applies the home_base rule.
+    Manual switches (stdin p/w, agent SWITCH PEER, Pi-side force-switch
+    hotkey) and auto-edge-switch are unaffected -- the user can move
+    OFF home base by any normal means; this just won't auto-bounce
+    them off it when home base dies.
+
+    Returns None if:
+      * dead-peer auto-switch is disabled (home_base is None)
+      * active IS home_base (asymmetric guard: never auto-switch away)
+      * active has been seen within the threshold window
+      * home_base itself is dead (no live destination)
+      * we're inside the dead-peer-switch cooldown window
+
+    Mutates `_last_dead_peer_switch_time` when returning a target so
+    the cooldown begins immediately.
+    """
+    global _last_dead_peer_switch_time
+
+    if _dead_peer_home_base is None:
+        return None
+
+    now = time.monotonic()
+
+    if now - _last_dead_peer_switch_time < _dead_peer_switch_cooldown_seconds:
+        return None
+
+    active = _active_target
+
+    # Asymmetric guard: never auto-switch AWAY from home base. If you're
+    # on home base and it dies, the dead peer IS the home base and
+    # there's nowhere safer to fall back to -- bouncing to the other
+    # side wouldn't help. The user fixes home base manually.
+    if active == _dead_peer_home_base:
+        return None
+
+    home = _dead_peer_home_base
+    active_age = now - _last_seen.get(active, 0.0)
+    home_age = now - _last_seen.get(home, 0.0)
+
+    if active_age <= _dead_peer_threshold_seconds:
+        return None  # active is alive; nothing to do
+
+    if home_age > _dead_peer_threshold_seconds:
+        # Home base also dead. Nowhere safe to fall back to.
+        return None
+
+    # Diagnostic. Lands once per auto-switch decision; the cooldown
+    # ensures we don't spam the log.
+    print(
+        f"dead peer detected: active={active} silent for {active_age:.1f}s "
+        f"(threshold {_dead_peer_threshold_seconds:.0f}s); "
+        f"home_base={home} alive ({home_age:.1f}s since last message); "
+        f"auto-switching to {home}"
+    )
+    _last_dead_peer_switch_time = now
+    return home
 
 
 def set_verbose(value: bool) -> None:
@@ -127,8 +295,9 @@ def perform_manual_switch(target: str, log_suffix: str = "") -> float:
     """Switch the active target to P or W using the target's last known
     cursor position. Returns the new last_switch_time.
 
-    Used by manual triggers: stdin 'p' / 'w' in the controller, and the
-    "SWITCH PEER" message from an agent. The auto edge-switch path uses
+    Used by manual triggers: stdin 'p' / 'w' in the controller, the
+    "SWITCH PEER" message from an agent, the Pi-side force-switch
+    hotkey, and dead-peer auto-switch. The auto edge-switch path uses
     a different entry-point computation (preserve x offset, land near
     the destination edge) and is NOT routed through here.
 

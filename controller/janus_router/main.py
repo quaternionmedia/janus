@@ -32,6 +32,7 @@ from janus_router.input_events import (
     process_event,
     release_all_inputs,
     release_inputs_for_switch,
+    set_force_switch_combos,
     set_verbose as input_events_set_verbose,
 )
 from janus_router import routing
@@ -39,6 +40,32 @@ from janus_router.serial_io import configure_uart, open_serial, serial_reader, w
 
 
 running = True
+
+
+# ---- Pi-side force-switch hotkey combos ------------------------------------
+#
+# Hardcoded so the hotkey is the same on every Pi. Tradeoff: editing this
+# constant requires a code change rather than a config edit. Acceptable
+# because (a) the combo is obscure enough that it's unlikely to conflict
+# with anything else, and (b) making it configurable wasn't worth the
+# config-plumbing.
+#
+# How it works: when the controller sees the trigger key (KEY_P or KEY_W)
+# pressed WHILE all required modifiers (KEY_RIGHTCTRL + KEY_RIGHTALT) are
+# held, it bypasses the active-target keystroke forwarding and forces
+# routing to the named target. The trigger key is never forwarded to any
+# agent (suppressed on DOWN, repeat, and UP -- see
+# input_events.set_force_switch_combos for the suppression mechanics).
+#
+# This works even if both agents are offline: routing state changes
+# Pi-side, and the agents pick up the new TARGET via the periodic
+# announce broadcast when they reconnect. The hotkey is also unaffected
+# by the auto-edge-switch cooldown -- a deliberate user action overrides
+# the rate limit.
+_FORCE_SWITCH_COMBOS: dict[str, tuple[frozenset[str], str]] = {
+    "KEY_P": (frozenset({"KEY_RIGHTCTRL", "KEY_RIGHTALT"}), "P"),
+    "KEY_W": (frozenset({"KEY_RIGHTCTRL", "KEY_RIGHTALT"}), "W"),
+}
 
 
 def handle_signal(signum, frame):
@@ -83,6 +110,10 @@ def run() -> int:
     input_events_set_verbose(verbose)
     routing.configure(config["switching"])
     routing.set_verbose(verbose)
+
+    # Register the Pi-side force-switch hotkeys with input_events. Must
+    # happen BEFORE the main loop starts processing events.
+    set_force_switch_combos(_FORCE_SWITCH_COMBOS)
 
     cmd_personal = config["commands"]["personal"].lower()
     cmd_work = config["commands"]["work"].lower()
@@ -207,6 +238,12 @@ def run() -> int:
 
     routing.init(personal_serial, work_serial)
 
+    # Seed the dead-peer detector with a grace window so the first 30s
+    # after startup don't trip a false positive while agents are still
+    # connecting. Inbound traffic from each agent will refresh its
+    # timestamp normally after that.
+    routing.init_dead_peer_tracking()
+
     serial_lines: queue.Queue[str] = queue.Queue()
     stop_event = threading.Event()
 
@@ -235,8 +272,9 @@ def run() -> int:
     last_target_announce_time = 0.0
 
     # Per-tick mutable state -- mouse REL accumulators, button-down
-    # bools, pressed keys. Lives for the whole event loop; process_event
-    # and the SYN_REPORT branch below mutate it in place.
+    # bools, pressed keys, force-switch suppressed keys. Lives for the
+    # whole event loop; process_event and the SYN_REPORT branch below
+    # mutate it in place.
     state = InputState()
 
     print("Janus.InputRouter started. Press Ctrl+C to stop.")
@@ -248,6 +286,8 @@ def run() -> int:
     print(f"work:     {work_uart_path}")
     print("commands: p=personal, w=work, c=clipboard, q=quit")
     print(f"auto edge-switch: {'enabled' if routing.auto_edge_switch_enabled() else 'DISABLED'}")
+    print("force-switch hotkeys: Right Ctrl + Right Alt + P/W")
+    print("dead-peer detection: enabled (see config.yaml for thresholds)")
     print(f"active target: {routing.active_target()}")
 
     try:
@@ -311,6 +351,39 @@ def run() -> int:
                             log_suffix=f"(REMOTE from {source_name})",
                         )
                         last_target_announce_time = routing.last_switch_time()
+
+            # Dead-peer auto-switch. After processing any newly-arrived
+            # serial lines (which have just refreshed their respective
+            # last-seen timestamps via inbound.handle_serial_line), check
+            # if the active peer has gone silent past the configured
+            # threshold AND the other peer is alive. The check is cheap
+            # (two timestamp comparisons + a cooldown check) so doing it
+            # every tick (~5+ Hz) is fine.
+            dead_peer_target = routing.check_dead_peer_switch()
+            if dead_peer_target is not None:
+                # Same release-then-switch dance as the other switch
+                # paths. The OLD target is dead so the UP messages we
+                # write to its serial port will sit in the Pi's UART
+                # buffer until the Pico reconnects (and at that point
+                # the agent will see UPs without matching DOWNs --
+                # Windows silently ignores those). Clearing local state
+                # via release_inputs_for_switch is the part we actually
+                # care about: it lets the new active start with no
+                # stale pressed_keys / button_down bools.
+                (
+                    state.left_button_down,
+                    state.right_button_down,
+                    state.middle_button_down,
+                ) = release_inputs_for_switch(
+                    routing.active_target(), personal_serial, work_serial,
+                    state.left_button_down, state.right_button_down, state.middle_button_down,
+                    state.pressed_keys,
+                )
+                routing.perform_manual_switch(
+                    dead_peer_target,
+                    log_suffix="(AUTO dead peer)",
+                )
+                last_target_announce_time = routing.last_switch_time()
 
             # Wait for input events or serial lines
             input_fds = [d.fd for d in open_devices.values()]
@@ -417,7 +490,39 @@ def run() -> int:
                     # lives in input_events.process_event. State
                     # mutations land in `state`; wire writes go to
                     # target_serial directly.
-                    process_event(event, state, target_serial)
+                    #
+                    # process_event returns "P" / "W" when a Pi-side
+                    # force-switch hotkey combo (Right Ctrl + Right Alt
+                    # + P/W) fires on the trigger key's initial DOWN.
+                    # The trigger keystroke is suppressed inside
+                    # process_event; we just need to release held
+                    # inputs on the OLD target (if changing) and
+                    # perform the switch. Repeat/UP events of the
+                    # suppressed key are also dropped inside
+                    # process_event -- they return None, so this
+                    # branch only fires once per combo activation.
+                    force_switch_target = process_event(event, state, target_serial)
+                    if force_switch_target is not None:
+                        if routing.active_target() != force_switch_target:
+                            (
+                                state.left_button_down,
+                                state.right_button_down,
+                                state.middle_button_down,
+                            ) = release_inputs_for_switch(
+                                routing.active_target(), personal_serial, work_serial,
+                                state.left_button_down, state.right_button_down, state.middle_button_down,
+                                state.pressed_keys,
+                            )
+                        routing.perform_manual_switch(
+                            force_switch_target,
+                            log_suffix="(FORCE Right Ctrl+Right Alt)",
+                        )
+                        last_target_announce_time = routing.last_switch_time()
+                        # Re-bind target_serial: subsequent events in
+                        # this same fd's read() (e.g., the modifier
+                        # keys still being held) should route to the
+                        # NEW active target, not the stale one.
+                        target_serial = routing.active_serial()
 
     except KeyboardInterrupt:
         pass
@@ -437,6 +542,7 @@ def run() -> int:
         state.right_button_down = False
         state.middle_button_down = False
         state.pressed_keys.clear()
+        state.suppressed_keys.clear()
 
         stop_event.set()
         personal_serial.close()

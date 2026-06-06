@@ -10,12 +10,17 @@ DATA / CLIPBOARD CLEAR (forwarded to the peer), and SWITCH PEER
 State updates (cursor and display geometry) mutate the caller-owned
 dicts in place.
 
+handle_serial_line also calls routing.record_message_from on every
+line, which feeds the dead-peer detector in routing.py -- any byte
+stream coming through proves the agent process is alive.
+
 The `_verbose` flag is set by `set_verbose()` at startup from
 main.py's distribution of the config-level verbose setting; used
 only by `handle_cursor_line` for per-event sync logging.
 """
 import serial
 
+from janus_router import routing
 from janus_router.serial_io import write_line
 
 
@@ -145,7 +150,15 @@ def handle_serial_line(
     Returns "P" or "W" if the line was a SWITCH PEER request that should
     trigger a manual switch in the main loop; else None. Cursor/display
     state updates are applied here directly (mutate the dicts in place).
+
+    Also feeds the dead-peer detector: every line is a heartbeat,
+    refreshing routing._last_seen[source_name] so silence past the
+    threshold can be distinguished from a busy-but-quiet agent. Done
+    BEFORE the parser dispatch so even lines we don't recognize still
+    count as proof of life.
     """
+    routing.record_message_from(source_name)
+
     if handle_display_line(line, personal_display, work_display):
         return None
 

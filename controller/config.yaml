@@ -67,6 +67,52 @@ switching:
   # Late-joining agents pick up their state within one interval.
   target_announce_interval_seconds: 2.0
 
+  # ---- Dead-peer detection ------------------------------------------------
+  #
+  # If the active target's agent goes silent for this many seconds,
+  # consider it dead. Heartbeats are any inbound serial line from the
+  # agent: TARGET echoes (every ~2s in response to the controller's own
+  # broadcasts), CURSOR keepalives, DISPLAY refreshes, CLIPBOARD events.
+  # Catches failure modes that the agent's SwitchOnShutdown can't catch:
+  # BSOD / kernel panic, hard power loss, USB disconnect between Pico
+  # and host PC, agent process force-killed without OS shutdown
+  # notification.
+  #
+  # Tradeoff: too low and brief scheduling hiccups can trigger false
+  # positives; too high and the user is "stuck" routing to a dead PC
+  # for that long before recovery. 10s with a 2s heartbeat gives 5
+  # missed beats before deciding "dead," which is very unlikely to be
+  # transient.
+  dead_peer_threshold_seconds: 10.0
+
+  # After a dead-peer auto-switch fires, no further auto-switch can
+  # fire for this many seconds. Prevents flapping if the user manually
+  # tries to switch back to the dead peer immediately. After the
+  # cooldown elapses, the detector will fire again if the active is
+  # still dead -- which means trying to manually use a dead peer
+  # within ~30s of a recent auto-switch will hold; trying again after
+  # 30s will get auto-corrected.
+  dead_peer_switch_cooldown_seconds: 30.0
+
+  # Home-base side for dead-peer auto-switch. Asymmetric by design:
+  # auto-switch never moves AWAY from home base. With "P" as home base
+  # (typical):
+  #   * On Work, Work dies, Personal alive  -> auto-switch to Personal
+  #   * On Personal, Personal dies, Work alive  -> do NOTHING (Personal
+  #     dying is a "fix Personal" event, not "use Work")
+  #   * On Personal, Personal alive  -> no action (active is fine)
+  #
+  # Set to "P" or "W" to pick a side. Set to null to disable dead-peer
+  # auto-switch entirely (the detector will still log "dead peer
+  # detected" diagnostics but won't switch).
+  #
+  # SCOPE: this only governs the dead-peer auto-switch path. Manual
+  # switches (stdin p/w in the Pi console, the Right Ctrl+Right Alt+P/W
+  # force-switch hotkey, the agent's 's' hotkey -> SWITCH PEER) and
+  # auto-edge-switch are unaffected -- the user can still move off
+  # home base by any of those normal means whenever they want.
+  dead_peer_home_base: "P"
+
 commands:
   # Single-character commands typed in the controller terminal.
   # Each must be exactly one character. Case-insensitive at runtime.
