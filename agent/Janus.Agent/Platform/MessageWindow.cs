@@ -13,17 +13,32 @@ namespace Janus.Agent.Platform;
 // its own message pump internally, so we just subscribe + delegate;
 // the events fire on a SystemEvents-internal thread.
 //
+// As of #3b, this hidden form also serves as the "owner" window for
+// the tray's Win32 popup menu (TrackPopupMenuEx requires an owner
+// HWND for proper message routing and dark-mode inheritance). Its
+// Handle is cached and exposed via the public Handle property; we
+// also apply DWMWA_USE_IMMERSIVE_DARK_MODE so menus owned by it
+// inherit the dark theme.
+//
 // Why this lives in Platform: clipboard listening, global hotkeys,
-// session-lock notification, and system power events all need OS-level
-// subscriptions. Centralizing the infrastructure here keeps the
-// individual feature modules focused on their own logic and lets future
-// subsystems plug in without owning their own STA thread.
+// session-lock notification, system power events, and the menu-owner
+// hidden window all need OS-level subscriptions. Centralizing the
+// infrastructure here keeps the individual feature modules focused on
+// their own logic and lets future subsystems plug in without owning
+// their own STA thread.
 
 internal static class MessageWindow
 {
     private static HiddenForm? _form;
     private static Thread? _thread;
     private static readonly ManualResetEventSlim _ready = new(initialState: false);
+
+    // Cached HWND of the hidden form. Captured during thread startup
+    // so other modules can pass it to Win32 APIs (notably
+    // TrackPopupMenuEx) without crossing thread boundaries to touch
+    // the Control. Assigned once, then read-only -- safe to read
+    // from any thread.
+    private static IntPtr _formHandle = IntPtr.Zero;
 
     // SystemEvents subscriptions. Held so we can unsubscribe on Stop()
     // to avoid leaking handlers across agent restarts.
@@ -40,6 +55,11 @@ internal static class MessageWindow
     /// the form.</summary>
     public static bool InvokeRequired => _form?.InvokeRequired == true;
 
+    /// <summary>HWND of the hidden form. IntPtr.Zero before Start() has
+    /// finished initializing, or after Stop(). Used by TrayIcon as the
+    /// owner window for TrackPopupMenuEx.</summary>
+    public static IntPtr Handle => _formHandle;
+
     /// <summary>Start the STA thread and the message pump. Blocks until
     /// the window's handle has been created, so callers can register
     /// listeners immediately after this returns. Calling more than once
@@ -53,7 +73,30 @@ internal static class MessageWindow
             try
             {
                 _form = new HiddenForm();
-                _ = _form.Handle;       // force handle creation before signaling ready
+                _ = _form.Handle;             // force handle creation
+                _formHandle = _form.Handle;   // cache for cross-thread reads
+
+                // Mark the form as dark-mode aware. The DWM attribute
+                // alone doesn't theme any visible chrome on a hidden
+                // form, but it propagates to popup menus owned by this
+                // HWND so they render in dark colors (combined with
+                // the SetPreferredAppMode call in Program.cs).
+                try
+                {
+                    int useDark = 1;
+                    Win32.DwmSetWindowAttribute(
+                        _formHandle,
+                        Win32.DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        ref useDark, sizeof(int));
+                }
+                catch
+                {
+                    // dwmapi.dll missing or attribute unrecognized on
+                    // older Windows builds. Not fatal -- menus would
+                    // just stay light, matching the OS default behavior
+                    // for non-aware apps.
+                }
+
                 _ready.Set();
                 Application.Run(_form);
             }
@@ -109,6 +152,7 @@ internal static class MessageWindow
         try { _thread?.Join(500); } catch { }
         _form = null;
         _thread = null;
+        _formHandle = IntPtr.Zero;
     }
 
     /// <summary>Subscribe to WM_CLIPBOARDUPDATE. Only one listener is

@@ -1,5 +1,7 @@
 ﻿using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
+using Janus.Agent.Gui;
+using Janus.Agent.Logging;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
 using Janus.Agent.Tray;
@@ -14,10 +16,18 @@ namespace Janus.Agent;
 //   ClipboardText   -- text I/O + hash dedup
 //   MessageWindow   -- STA hidden window backing clipboard listener,
 //                      global hotkey registration, session-lock +
-//                      system power-event notification
+//                      system power-event notification; also serves
+//                      as the owner HWND for the tray's Win32 popup
+//                      menu
 //   Actions         -- console-key + hotkey dispatch into actions
-//   ConsoleWindow   -- hide/show the agent's own console + tool-window style
-//   TrayIcon        -- NotifyIcon + context menu, primary user-facing UI
+//   ConsoleWindow   -- (vestigial) hide/show the agent's own console
+//                      window; effectively a no-op now that we build
+//                      as WinExe
+//   TrayIcon        -- NotifyIcon + Win32 popup menu, primary
+//                      user-facing UI
+//   GuiHost         -- dispatcher thread + WPF logs/status window
+//   LogSink         -- in-process ring buffer of Console.WriteLine output
+//   TeeWriter       -- forwards Console.Out to the real console AND the sink
 //   Config          -- appsettings.json -> static properties
 //   Win32           -- P/Invoke surface
 //
@@ -52,15 +62,35 @@ internal static class Program
             return;
         }
 
-        // Apply tool-window style + hide console BEFORE any other startup
-        // logging. ApplyToolWindowStyle() flips WS_EX_TOOLWINDOW so the
-        // window won't appear in the taskbar even when later shown via
-        // the tray menu. Hide() makes it invisible immediately so the
-        // user doesn't see a console flash at process start.
-        //
-        // Console.WriteLine still works against a hidden console -- the
-        // text accumulates in the console buffer and is visible when the
-        // user clicks "Show window" from the tray.
+        // Install the TeeWriter as the FIRST thing we do after argument
+        // validation. Every Console.WriteLine from now on flows to both
+        // the (silent in WinExe) real console buffer and the LogSink
+        // that the GUI tails. Done before any other module starts so
+        // we don't miss startup log lines.
+        Console.SetOut(new TeeWriter(Console.Out));
+
+        // Signal dark-mode capability to Windows. After this call, the
+        // OS will render native popup menus (used by our tray icon via
+        // TrackPopupMenuEx) in dark colors when the system theme is
+        // dark. Undocumented uxtheme.dll ordinal 135, but stable across
+        // Win10 1903+ / Win11. Must be called early -- before any
+        // window is created -- to take effect.
+        try
+        {
+            Win32.SetPreferredAppMode(Win32.APP_MODE_ALLOW_DARK);
+        }
+        catch (Exception ex)
+        {
+            // uxtheme.dll missing on a non-desktop SKU, or the ordinal
+            // changed in some future Windows update. Not fatal; menus
+            // will just stay light.
+            Console.WriteLine($"SetPreferredAppMode failed: {ex.Message}");
+        }
+
+        // Tool-window style + hide on the console window. Both are
+        // safe no-ops now that we build as WinExe (GetConsoleWindow
+        // returns IntPtr.Zero and the methods early-return), but they
+        // remain in case someone ever flips OutputType back to Exe.
         ConsoleWindow.ApplyToolWindowStyle();
         ConsoleWindow.Hide();
 
@@ -128,6 +158,14 @@ internal static class Program
         // cts.Cancel, which unwinds this Main exactly the same way
         // Ctrl+C in the console would.
         TrayIcon.Start(deviceId, () => cts.Cancel());
+
+        // GuiHost owns its own STA thread (separate from MessageWindow's
+        // -- WPF and WinForms can't share a dispatcher). Start it AFTER
+        // TrayIcon so all startup banner lines are already in LogSink
+        // and will be seeded into the window's log view when it
+        // constructs. The window is created hidden; the tray's
+        // "Show window" item is the way to bring it up.
+        GuiHost.Start(deviceId);
 
         // ---- Reconnect loop ----------------------------------------------
 
@@ -198,9 +236,14 @@ internal static class Program
         finally
         {
             Console.WriteLine("Stopping agent.");
-            // Tear down UI before the message pump. TrayIcon.Stop()
-            // marshals onto MessageWindow's STA thread, so the pump
-            // must still be running when we call it.
+            // Tear down UI in reverse-startup order:
+            //  1. GuiHost  -- close the WPF window, shut its dispatcher.
+            //  2. TrayIcon -- remove the tray icon and destroy the
+            //                 Win32 popup menu (marshals onto
+            //                 MessageWindow's STA, so the WinForms pump
+            //                 must still be running).
+            //  3. MessageWindow -- stop the WinForms STA pump.
+            GuiHost.Stop();
             TrayIcon.Stop();
             MessageWindow.Stop();
         }

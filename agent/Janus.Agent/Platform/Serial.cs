@@ -1,6 +1,7 @@
 using Janus.Agent.Clipboard;
 using Janus.Agent.Settings;
 using System.Globalization;
+using System.IO;
 using System.IO.Ports;
 
 namespace Janus.Agent.Platform;
@@ -18,12 +19,27 @@ internal static class Serial
     // ---- Public state -------------------------------------------------
     //
     // Set internally by BeginSession / EndSession / HandleIncomingLine.
-    // External readers (clipboard outbound code, switch triggers)
-    // consume these to send via the active port; they never write them.
+    // External readers (clipboard outbound code, switch triggers, the
+    // GUI's status sidebar) consume these to send via the active port
+    // or render status; they never write them.
 
     public static SerialPort? ActivePort { get; private set; }
     public static string? ActiveDeviceId { get; private set; }
     public static bool IsActiveTarget { get; private set; }
+
+    /// <summary>The target the controller is currently routing input to,
+    /// as last reported via a TARGET broadcast. "P" or "W", or null if
+    /// we haven't heard from the controller yet (or the session was
+    /// reset). Distinct from IsActiveTarget, which only tells us
+    /// whether THIS PC is the active one.</summary>
+    public static string? CurrentTarget { get; private set; }
+
+    /// <summary>UTC timestamp of the last inbound line received from
+    /// the controller. Updated at the top of HandleIncomingLine. Used
+    /// by the GUI's "last activity" sidebar field. DateTime.MinValue
+    /// before the first line arrives (or after a session reset).
+    /// </summary>
+    public static DateTime LastActivityUtc { get; private set; } = DateTime.MinValue;
 
     // ---- Private state ------------------------------------------------
     //
@@ -43,6 +59,8 @@ internal static class Serial
         _displaySentForCurrentConnection = false;
         _lastDisplaySentUtc = DateTime.MinValue;
         IsActiveTarget = false;
+        CurrentTarget = null;
+        LastActivityUtc = DateTime.MinValue;
         _lastCursorSentUtc = DateTime.MinValue;
         _lastCursorX = int.MinValue;
         _lastCursorY = int.MinValue;
@@ -54,6 +72,10 @@ internal static class Serial
     {
         ActivePort = null;
         ActiveDeviceId = null;
+        // Keep CurrentTarget and LastActivityUtc as-is on session end so
+        // the GUI's status sidebar shows the LAST known state rather
+        // than going blank during reconnect cycles. They reset cleanly
+        // on the next BeginSession.
     }
 
     /// <summary>Request a serial reconnect by closing the current port.
@@ -149,10 +171,16 @@ internal static class Serial
 
     private static void HandleIncomingLine(string line, SerialPort port, string deviceId)
     {
+        // Any inbound line is proof the controller is alive. Refresh
+        // the last-activity timestamp first thing so the GUI's sidebar
+        // updates promptly regardless of which verb follows.
+        LastActivityUtc = DateTime.UtcNow;
+
         if (line.StartsWith("TARGET ", StringComparison.Ordinal))
         {
             string activeTarget = line[7..];
             bool wasActive = IsActiveTarget;
+            CurrentTarget = activeTarget;
             IsActiveTarget = string.Equals(activeTarget, deviceId, StringComparison.Ordinal);
 
             // Transition to active: invalidate the cached cursor so the

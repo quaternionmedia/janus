@@ -1,0 +1,665 @@
+<Window x:Class="Janus.Agent.Gui.GuiWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Janus.Agent"
+        Width="900" Height="550"
+        MinWidth="600" MinHeight="350"
+        Background="#1E1E1E"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="BodyBrush"    Color="#1E1E1E"/>
+        <SolidColorBrush x:Key="SidebarBrush" Color="#252526"/>
+        <SolidColorBrush x:Key="BorderBrush"  Color="#3E3E42"/>
+        <SolidColorBrush x:Key="HoverBrush"   Color="#2D2D30"/>
+        <SolidColorBrush x:Key="ActiveBrush"  Color="#3E3E42"/>
+        <SolidColorBrush x:Key="TextBrush"    Color="#CCCCCC"/>
+        <SolidColorBrush x:Key="MutedBrush"   Color="#858585"/>
+        <SolidColorBrush x:Key="FaintBrush"   Color="#585858"/>
+        <SolidColorBrush x:Key="AccentBlue"   Color="#75BEFF"/>
+
+        <!--
+            Icon font: Segoe Fluent Icons is the Win11 default name;
+            Segoe MDL2 Assets is the Win10 fallback. Both ship with
+            the OS; specifying both as a fallback chain means we render
+            correctly on either.
+        -->
+        <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+        </Style>
+
+        <Style x:Key="SidebarText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        </Style>
+
+        <!--
+            Action button used in the sidebar. Icon + label, transparent
+            background, subtle border. Hover lightens the background.
+            Disabled state dims via Opacity.
+        -->
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource ActiveBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            Icon-only button (used for the footer gear and the modal's
+            close X). No border, hover lightens.
+        -->
+        <Style x:Key="IconButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!--
+            Dark-themed TextBox used for the log search input. The default
+            WPF TextBox has a light-blue selection highlight and a white
+            background no matter what we have to template it to get a
+            properly dark control.
+        -->
+        <Style x:Key="DarkTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
+            <Setter Property="SelectionBrush" Value="#264F78"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Lucida Console, Courier New"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Padding="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="LabelCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="auto-scroll"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       VerticalAlignment="Center"/>
+                            <Border x:Name="Dot" Width="6" Height="6"
+                                    Background="{StaticResource MutedBrush}"
+                                    CornerRadius="3"
+                                    Margin="6,1,0,0"
+                                    VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="Dot" Property="Background" Value="#73C991"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="LogRowText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Lucida Console, Courier New"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="TextWrapping" Value="NoWrap"/>
+        </Style>
+
+        <!--
+            Settings modal: each row is a label (muted) and value (text).
+            SettingsLabel and SettingsValue styles keep the typography
+            consistent across the four sections.
+        -->
+        <Style x:Key="SettingsLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="Margin" Value="0,0,16,6"/>
+        </Style>
+
+        <Style x:Key="SettingsValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <Style x:Key="SettingsSectionHeader" TargetType="TextBlock" BasedOn="{StaticResource SectionLabel}">
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+
+        <!-- Dark scrollbar pieces (used by log + settings ScrollViewers). -->
+
+        <Style x:Key="MinimalRepeatButton" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MinimalScrollThumb" TargetType="Thumb">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="ThumbBorder"
+                                Background="#4E4E4E"
+                                CornerRadius="3"
+                                Margin="2"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbBorder" Property="Background" Value="#6E6E6E"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbBorder" Property="Background" Value="#8A8A8A"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Vertical">
+                    <Setter Property="Width" Value="12"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="{TemplateBinding Background}">
+                                    <Track Name="PART_Track" IsDirectionReversed="True">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Style="{StaticResource MinimalRepeatButton}"
+                                                          Command="ScrollBar.PageUpCommand"/>
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb Style="{StaticResource MinimalScrollThumb}"/>
+                                        </Track.Thumb>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Style="{StaticResource MinimalRepeatButton}"
+                                                          Command="ScrollBar.PageDownCommand"/>
+                                        </Track.IncreaseRepeatButton>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Height" Value="12"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="{TemplateBinding Background}">
+                                    <Track Name="PART_Track">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Style="{StaticResource MinimalRepeatButton}"
+                                                          Command="ScrollBar.PageLeftCommand"/>
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb Style="{StaticResource MinimalScrollThumb}"/>
+                                        </Track.Thumb>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Style="{StaticResource MinimalRepeatButton}"
+                                                          Command="ScrollBar.PageRightCommand"/>
+                                        </Track.IncreaseRepeatButton>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <!--
+        Outer Grid wraps the main content + the modal overlay. The modal
+        sits later in the document so it draws on top when visible.
+    -->
+    <Grid>
+
+        <!-- ============== MAIN CONTENT (sidebar + log) =========== -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ============ SIDEBAR ============ -->
+            <Border Grid.Column="0"
+                    Background="{StaticResource SidebarBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,1,0">
+                <Grid Margin="18,18,18,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Status sections (top) -->
+                    <StackPanel Grid.Row="0">
+                        <TextBlock Text="STATUS" Style="{StaticResource SectionLabel}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding StatusDot}"/>
+                            <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0" Style="{StaticResource SidebarText}"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding PortInfo}" Foreground="{StaticResource FaintBrush}" FontSize="11" Margin="16,0,0,18"/>
+
+                        <TextBlock Text="THIS PC" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Text="{Binding ThisPc}" Style="{StaticResource SidebarText}" Margin="0,0,0,18"/>
+
+                        <TextBlock Text="ACTIVE TARGET" Style="{StaticResource SectionLabel}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                            <TextBlock Text="{Binding ActiveTarget}" Foreground="{StaticResource AccentBlue}" FontWeight="Medium" FontSize="13"/>
+                            <TextBlock Text="{Binding ActiveTargetSuffix}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="8,1,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <TextBlock Text="LAST ACTIVITY" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Text="{Binding LastActivity}" Style="{StaticResource SidebarText}"/>
+                    </StackPanel>
+
+                    <!-- Spacer -->
+                    <Grid Grid.Row="1"/>
+
+                    <!-- Actions (above footer) -->
+                    <StackPanel Grid.Row="2" Margin="0,0,0,12">
+                        <TextBlock Text="ACTIONS" Style="{StaticResource SectionLabel}" Margin="0,0,0,8"/>
+                        <Button Style="{StaticResource ActionButton}"
+                                Margin="0,0,0,4"
+                                IsEnabled="{Binding IsConnected}"
+                                Click="SwitchAction_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8AB;" FontFamily="{StaticResource IconFont}"
+                                           Foreground="{StaticResource MutedBrush}" FontSize="13"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Switch to peer" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource ActionButton}"
+                                Margin="0,0,0,4"
+                                IsEnabled="{Binding IsConnected}"
+                                Click="ClipboardAction_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE16F;" FontFamily="{StaticResource IconFont}"
+                                           Foreground="{StaticResource MutedBrush}" FontSize="13"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Send clipboard" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource ActionButton}"
+                                IsEnabled="{Binding IsConnected}"
+                                Click="ReconnectAction_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}"
+                                           Foreground="{StaticResource MutedBrush}" FontSize="13"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Reconnect" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Footer (bottom): version on left, settings gear on right -->
+                    <Border Grid.Row="3"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Janus.Agent · v0.1"
+                                       Foreground="{StaticResource FaintBrush}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center"/>
+                            <Button Grid.Column="1"
+                                    Style="{StaticResource IconButton}"
+                                    ToolTip="Settings"
+                                    Click="SettingsButton_Click">
+                                <TextBlock Text="&#xE713;"
+                                           FontFamily="{StaticResource IconFont}"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="14"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- ============ LOG ============ -->
+            <Grid Grid.Column="1" Background="{StaticResource BodyBrush}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Log header -->
+                <Border Grid.Row="0"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="14,10,14,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="LOG"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0,2,16,0"
+                                   VerticalAlignment="Center"/>
+
+                        <Grid Grid.Column="1" Width="220" VerticalAlignment="Center">
+                            <TextBox x:Name="SearchBox"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                            <TextBlock IsHitTestVisible="False"
+                                       Text="filter log…"
+                                       Foreground="{StaticResource FaintBrush}"
+                                       FontFamily="Cascadia Mono, Consolas, Lucida Console, Courier New"
+                                       FontSize="11.5"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+
+                        <CheckBox Grid.Column="3"
+                                  x:Name="AutoScrollCheck"
+                                  IsChecked="True"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource LabelCheckBox}"
+                                  Click="AutoScrollCheck_Click"/>
+                    </Grid>
+                </Border>
+
+                <!-- Log content -->
+                <ScrollViewer x:Name="LogScrollViewer"
+                              Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Auto"
+                              ScrollChanged="LogScrollViewer_ScrollChanged"
+                              Padding="14,8,14,8"
+                              Background="Transparent">
+                    <ItemsControl ItemsSource="{Binding LogLines}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Text}"
+                                           Foreground="{Binding Foreground}"
+                                           Style="{StaticResource LogRowText}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+
+        <!-- ============== SETTINGS MODAL OVERLAY =========== -->
+        <!--
+            Initially Collapsed; SettingsButton_Click in code-behind
+            sets Visibility=Visible to show. Clicks on the semi-
+            transparent backdrop close the modal; clicks on the panel
+            don't (WPF hit testing picks the topmost element, so the
+            panel "shields" the backdrop in its area).
+        -->
+        <Grid x:Name="SettingsModal" Visibility="Collapsed">
+            <Rectangle Fill="#99000000" MouseLeftButtonDown="ModalBackdrop_Click"/>
+
+            <Border Width="520" MaxHeight="460"
+                    Background="{StaticResource SidebarBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Modal header -->
+                    <Border Grid.Row="0"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            Padding="20,14,8,14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="SETTINGS"
+                                       Style="{StaticResource SectionLabel}"
+                                       Margin="0"
+                                       VerticalAlignment="Center"/>
+                            <Button Grid.Column="1"
+                                    Style="{StaticResource IconButton}"
+                                    ToolTip="Close"
+                                    Click="CloseSettings_Click">
+                                <TextBlock Text="&#xE8BB;"
+                                           FontFamily="{StaticResource IconFont}"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="12"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- Modal body -->
+                    <ScrollViewer Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Padding="20,16,20,18">
+                        <StackPanel>
+
+                            <!-- CONNECTION -->
+                            <TextBlock Text="CONNECTION" Style="{StaticResource SettingsSectionHeader}"/>
+                            <Grid Margin="0,0,0,18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Baud rate" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgBaud}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Read timeout" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgReadTimeout}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Write timeout" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgWriteTimeout}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Read buffer" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgReadBuffer}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Write buffer" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgWriteBuffer}" Style="{StaticResource SettingsValue}"/>
+                            </Grid>
+
+                            <!-- SWITCH TRIGGERS -->
+                            <TextBlock Text="SWITCH TRIGGERS" Style="{StaticResource SettingsSectionHeader}"/>
+                            <Grid Margin="0,0,0,18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Column="0" Grid.Row="0" Text="On workstation lock" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgOnLock}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="1" Text="On shutdown / suspend" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgOnShutdown}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Console key" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgSwitchConsole}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Global hotkey" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgSwitchHotkey}" Style="{StaticResource SettingsValue}"/>
+                            </Grid>
+
+                            <!-- CLIPBOARD -->
+                            <TextBlock Text="CLIPBOARD" Style="{StaticResource SettingsSectionHeader}"/>
+                            <Grid Margin="0,0,0,18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Outbound mode" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgOutboundMode}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Auto-sync threshold" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgAutoSyncBytes}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Max size" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgMaxBytes}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Push console key" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgPushConsole}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Push global hotkey" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgPushHotkey}" Style="{StaticResource SettingsValue}"/>
+                            </Grid>
+
+                            <!-- TIMING -->
+                            <TextBlock Text="TIMING" Style="{StaticResource SettingsSectionHeader}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Main tick" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgMainTick}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Reconnect delay" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgReconnectDelay}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Cursor send interval" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgCursorSendInterval}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Cursor keepalive" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgCursorKeepalive}" Style="{StaticResource SettingsValue}"/>
+                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Display refresh" Style="{StaticResource SettingsLabel}"/>
+                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgDisplayRefresh}" Style="{StaticResource SettingsValue}"/>
+                            </Grid>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+    </Grid>
+</Window>
