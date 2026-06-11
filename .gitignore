@@ -38,3 +38,7 @@ Thumbs.db
 .dev
 .dev/
 dev.*
+
+# ---- Graphify -----------------------------------------------------------
+graphify-out/
+.graphifyignore
