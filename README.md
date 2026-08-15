@@ -162,6 +162,15 @@ Reboot and confirm both devices exist:
 ls -l /dev/ttyAMA0 /dev/ttyAMA2
 ```
 
+After running raspi-config, sanity-check that the kernel isn't still grabbing the UART for its console:
+
+```bash
+cat /boot/firmware/cmdline.txt
+```
+
+If you see `console=serial0,115200` (or `console=ttyAMA0,115200`) anywhere in that line, remove that fragment. Edit the file with `sudo nano /boot/firmware/cmdline.txt` — keep it a single line, don't add newlines — and reboot. 
+Any other `console=` (like `console=tty1`) is fine and should stay.
+
 ### 4. Group membership
 
 The controller needs to read `/dev/input/event*` (via the `input` group) and
@@ -388,7 +397,7 @@ The agent reads `appsettings.json` from **the folder it launches from**
 the project's `appsettings.json` to that folder on every build.
 
 The two PCs need different settings — see the [switch
-triggers](#switch-triggers) section below. Copy the shipped
+triggers](#configuration-reference) section below. Copy the shipped
 appsettings.json as-is on the primary PC (typically Personal).
 On the secondary PC (typically Work), set OnLock: true and 
 OnShutdown: true so locking or shutting down the secondary 
