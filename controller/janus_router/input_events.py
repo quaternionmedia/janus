@@ -39,6 +39,24 @@ from janus_router.serial_io import write_line
 
 _verbose = False
 
+# Chatter-suppression window for BTN_MIDDLE presses. A DOWN arriving
+# within this many seconds of the previous UP is treated as switch
+# bounce (bouncing microswitch contacts making+breaking rapidly) and
+# suppressed. Real double-clicks leave 50ms+ between release and the
+# next press; observed chatter fires within ~10ms. 30ms is a
+# comfortable margin between the two.
+#
+# Only BTN_MIDDLE gets this treatment. Left/right/scroll buttons are
+# unaffected: the scroll wheel especially generates deliberate rapid
+# events that must not be dropped, and the wheel click is what a
+# chattering microswitch typically breaks first on a mouse of this
+# type (wheel-button switches see far more mechanical stress than L/R).
+#
+# Tune upward if some chatter still leaks through -- but staying below
+# ~50ms keeps a real double-middle-click from being suppressed. If you
+# need to disable entirely (e.g. mouse replaced), set to 0.
+MIDDLE_CHATTER_THRESHOLD_SECONDS = 0.030
+
 # Pi-side force-switch hotkey combos. Maps each TRIGGER key (e.g.
 # "KEY_P") to a (required_modifiers, target_letter) tuple. When
 # process_event sees a KEY DOWN whose name matches a configured
@@ -218,6 +236,11 @@ class InputState:
     agent. Names enter the set inside _check_force_switch on combo
     match, leave it when the UP arrives.
 
+    last_middle_up_ts / drop_next_middle_up / dropped_middle_chatter_count
+    implement software debounce for a bouncing BTN_MIDDLE microswitch.
+    See MIDDLE_CHATTER_THRESHOLD_SECONDS above and the check in
+    _emit_button. Only BTN_MIDDLE uses these.
+
     A single InputState lives for the whole event loop -- created
     before the while loop, mutated in place by process_event and by
     the SYN_REPORT branch.
@@ -231,6 +254,19 @@ class InputState:
     middle_button_down: bool = False
     pressed_keys: set[str] = field(default_factory=set)
     suppressed_keys: set[str] = field(default_factory=set)
+
+    # BTN_MIDDLE chatter suppression state. last_middle_up_ts stores
+    # the kernel timestamp of the most recent BTN_MIDDLE UP (whether
+    # forwarded or suppressed -- we time the NEXT bounce from the
+    # actual release, not from the last release we happened to
+    # forward). drop_next_middle_up flags that the current DOWN was
+    # suppressed and its paired UP must be too, so the Pico sees a
+    # matched pair (or nothing) rather than a stray UP. Incremented
+    # counter is diagnostic only; when it grows fast, the physical
+    # switch is degrading and the mouse should be replaced.
+    last_middle_up_ts: float = 0.0
+    drop_next_middle_up: bool = False
+    dropped_middle_chatter_count: int = 0
 
 
 def process_event(
@@ -336,14 +372,54 @@ def _emit_button(
     value=2 for held keyboard keys anyway, though some kernels have
     been observed to emit it on long-held mouse buttons. Either way:
     ignore.
+
+    MIDDLE additionally goes through chatter suppression: a DOWN whose
+    kernel timestamp is within MIDDLE_CHATTER_THRESHOLD_SECONDS of the
+    previous UP is treated as switch bounce and dropped. See the
+    constant's docstring above for tuning. Only MIDDLE is filtered
+    this way; other buttons and the scroll wheel are untouched.
     """
     if event.value == 1:
+        # Chatter suppression on MIDDLE only. Use kernel timestamp
+        # (event.timestamp()) rather than wall-clock time.time() so
+        # measurement isn't distorted by Python scheduling jitter --
+        # the whole point is telling apart 10ms bounce from 50ms
+        # legitimate rapid-click, and print / GIL latency would
+        # easily smear the two together.
+        if wire_name == "MIDDLE":
+            gap = event.timestamp() - state.last_middle_up_ts
+            if gap < MIDDLE_CHATTER_THRESHOLD_SECONDS:
+                state.dropped_middle_chatter_count += 1
+                # Flag the paired UP so we suppress it too. Otherwise
+                # the Pico sees a stray UP with no matching DOWN, which
+                # for a state-tracking HID descriptor is harmless (the
+                # button is already up) but for cleanliness and future
+                # descriptor changes we keep DOWN/UP paired end-to-end.
+                state.drop_next_middle_up = True
+                if _verbose:
+                    print(
+                        f"middle-click chatter suppressed "
+                        f"(gap={gap * 1000:.1f}ms, total dropped: "
+                        f"{state.dropped_middle_chatter_count})"
+                    )
+                return
+
         if not getattr(state, attr):
             setattr(state, attr, True)
             if _verbose:
                 print(f"MOUSE BUTTON {wire_name}=DOWN")
             write_line(target_serial, f"MOUSE BUTTON {wire_name}=DOWN")
     elif event.value == 0:
+        # Record the UP timestamp BEFORE the drop-check so the next
+        # bounce is measured from THIS release, not the last release
+        # we happened to forward. Two chatters in a row would
+        # otherwise widen the effective window unpredictably.
+        if wire_name == "MIDDLE":
+            state.last_middle_up_ts = event.timestamp()
+            if state.drop_next_middle_up:
+                state.drop_next_middle_up = False
+                return
+
         if getattr(state, attr):
             setattr(state, attr, False)
             if _verbose:
