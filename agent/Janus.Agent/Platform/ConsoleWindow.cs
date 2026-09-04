@@ -75,7 +75,7 @@ internal static class ConsoleWindow
         }
         catch (Exception ex)
         {
-            Log.Debug(LogCategory.System, $"ConsoleWindow Style Apply Error: {ex.Message}");
+            Log.System.Debug("ConsoleWindow style apply error: {Error}", ex.Message);
         }
     }
 }

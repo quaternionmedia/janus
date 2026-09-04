@@ -102,7 +102,7 @@ internal static class MessageWindow
             }
             catch (Exception ex)
             {
-                Log.Error(LogCategory.System, $"MessageWindow thread error: {ex.Message}");
+                Log.System.Error(ex, "MessageWindow thread error.");
                 _ready.Set(); // unblock waiters even on failure
             }
         })
@@ -203,14 +203,14 @@ internal static class MessageWindow
         {
             // e.Reason is Logoff or SystemShutdown. We don't
             // distinguish: both are "this PC is going away soon."
-            Log.Debug(LogCategory.System, $"session ending: {e.Reason}");
+            Log.System.Debug("session ending: {Reason}", e.Reason);
             try
             {
                 _powerEventCallback?.Invoke();
             }
             catch (Exception ex)
             {
-                Log.Error(LogCategory.System, $"Session-ending handler error: {ex.Message}");
+                Log.System.Error(ex, "Session-ending handler error.");
             }
         };
         SystemEvents.SessionEnding += _onSessionEnding;
@@ -219,7 +219,7 @@ internal static class MessageWindow
         {
             // Only Suspend is a "going away" event. Resume and
             // StatusChange aren't relevant for switch-on-shutdown.
-            Log.Debug(LogCategory.System, $"power mode changed: {e.Mode}");
+            Log.System.Debug("power mode changed: {Mode}", e.Mode);
             if (e.Mode != PowerModes.Suspend) return;
             try
             {
@@ -227,7 +227,7 @@ internal static class MessageWindow
             }
             catch (Exception ex)
             {
-                Log.Error(LogCategory.System, $"Power-mode handler error: {ex.Message}");
+                Log.System.Error(ex, "Power-mode handler error.");
             }
         };
         SystemEvents.PowerModeChanged += _onPowerModeChanged;
@@ -335,7 +335,7 @@ internal static class MessageWindow
         {
             if (string.IsNullOrEmpty(key))
             {
-                Log.Warn(LogCategory.System, $"{label} hotkey enabled but no key configured; skipping.");
+                Log.System.Warn("{Label} hotkey enabled but no key configured; skipping.", label);
                 return -1;
             }
 
@@ -357,12 +357,12 @@ internal static class MessageWindow
             if (ok)
             {
                 _hotkeyCallbacks[id] = onPressed;
-                Log.Info(LogCategory.System, $"{label} hotkey registered: {combo}");
+                Log.System.Info("{Label} hotkey registered: {Combo}", label, combo);
                 return id;
             }
             else
             {
-                Log.Error(LogCategory.System, $"{label} hotkey registration failed ({combo}); another app may own this combo.");
+                Log.System.Error("{Label} hotkey registration failed ({Combo}); another app may own this combo.", label, combo);
                 return -1;
             }
         }
@@ -385,7 +385,7 @@ internal static class MessageWindow
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(LogCategory.Clipboard, $"Clipboard change handler error: {ex.Message}");
+                    Log.Clipboard.Error(ex, "Clipboard change handler error.");
                 }
             }
             else if (m.Msg == WmHotkey)
@@ -399,7 +399,7 @@ internal static class MessageWindow
                     }
                     catch (Exception ex)
                     {
-                        Log.Error(LogCategory.System, $"Hotkey handler error (id {id:X}): {ex.Message}");
+                        Log.System.Error(ex, "Hotkey handler error (id {HotkeyId:X}).", id);
                     }
                 }
             }
@@ -408,14 +408,14 @@ internal static class MessageWindow
                 int evt = m.WParam.ToInt32();
                 if (evt == Win32.WtsSessionLock)
                 {
-                    Log.Debug(LogCategory.System, "workstation locked.");
+                    Log.System.Debug("workstation locked.");
                     try
                     {
                         _onSessionLock?.Invoke();
                     }
                     catch (Exception ex)
                     {
-                        Log.Error(LogCategory.System, $"Session lock handler error: {ex.Message}");
+                        Log.System.Error(ex, "Session lock handler error.");
                     }
                 }
             }

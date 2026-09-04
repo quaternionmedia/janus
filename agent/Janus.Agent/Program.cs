@@ -1,7 +1,6 @@
 ﻿using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
 using Janus.Agent.Gui;
-using Janus.Agent.Logging;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
 using Janus.Agent.Tray;
@@ -10,6 +9,7 @@ using Serilog;
 using Serilog.Formatting.Compact;
 using System.IO;
 using System.IO.Ports;
+using Log = Janus.Agent.Logging.Log;
 
 namespace Janus.Agent;
 
@@ -117,7 +117,13 @@ internal static class Program
 
         if (isDevelopment)
         {
+            // WinExe processes don't inherit the parent terminal's console
+            // by default. Attach it explicitly so the Console sink's writes
+            // land somewhere visible during `dotnet run`.
+            Win32.AttachConsole(Win32.ATTACH_PARENT_PROCESS);
+
             loggerConfig = loggerConfig.WriteTo.Console(
+                theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Code,
                 outputTemplate:
                     "{Timestamp:HH:mm:ss} | {Level:u4} | {Category,-9} : {Message:lj}{NewLine}{Exception}");
         }
@@ -128,6 +134,7 @@ internal static class Program
         {
             Console.SetOut(new SerilogConsoleTee());
         }
+        Log.System.Info("Running in {Mode}.", isDevelopment ? "Development" : "Production");
 
         // Signal dark-mode capability to Windows. After this call, the
         // OS will render native popup menus (used by our tray icon via
@@ -144,7 +151,7 @@ internal static class Program
             // uxtheme.dll missing on a non-desktop SKU, or the ordinal
             // changed in some future Windows update. Not fatal; menus
             // will just stay light.
-            Log.Warn(LogCategory.System, $"SetPreferredAppMode failed: {ex.Message}");
+            Log.System.Warn(ex, "SetPreferredAppMode failed.");
         }
 
         // Tool-window style + hide on the console window. Both are
@@ -164,13 +171,15 @@ internal static class Program
             cts.Cancel();
         };
 
-        Log.Info(LogCategory.System, $"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
-        Log.Info(LogCategory.System, $"serial port: {portName}");
-        Log.Info(LogCategory.System, $"clipboard outbound mode: {Config.ClipboardOutboundMode}");
-        Log.Info(LogCategory.System, $"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
-            + (Config.ClipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
-        Log.Info(LogCategory.System, $"switch devices: console key '{Config.SwitchConsoleKey}'"
-            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
+        Log.System.Info("Janus.Agent [{DeviceId}] started. Press Ctrl+C to stop.", deviceId);
+        Log.System.Info("serial port: {PortName}", portName);
+        Log.System.Info("clipboard outbound mode: {OutboundMode}", Config.ClipboardOutboundMode);
+        Log.System.Info("clipboard push: console key '{ConsoleKey}', global hotkey {HotkeyState}",
+            Config.ClipboardPushConsoleKey,
+            Config.ClipboardPushHotkeyEnabled ? "enabled" : "disabled");
+        Log.System.Info("switch devices: console key '{ConsoleKey}', global hotkey {HotkeyState}\n",
+            Config.SwitchConsoleKey,
+            Config.SwitchHotkeyEnabled ? "enabled" : "disabled");
 
         // ---- Composition -------------------------------------------------
 
@@ -201,13 +210,13 @@ internal static class Program
         if (Config.SwitchOnLock)
         {
             MessageWindow.RegisterLockListener(() => Actions.SwitchToPeer("lock"));
-            Log.Info(LogCategory.System, "switch on workstation lock: enabled");
+            Log.System.Info("switch on workstation lock: enabled");
         }
 
         if (Config.SwitchOnShutdown)
         {
             MessageWindow.RegisterPowerEventListener(() => Actions.SwitchToPeer("shutdown"));
-            Log.Info(LogCategory.System, "switch on shutdown/suspend: enabled");
+            Log.System.Info("switch on shutdown/suspend: enabled");
         }
 
         Actions.StartConsoleKeyReader(cts.Token);
@@ -240,7 +249,7 @@ internal static class Program
                     continue;
                 }
 
-                Log.Info(LogCategory.Serial, $"Serial connected: {portName}");
+                Log.Serial.Info("\nSerial connected: {PortName}", portName);
                 Serial.BeginSession(port, deviceId);
 
                 // Seed the sync hash with the current clipboard so whatever
@@ -269,7 +278,7 @@ internal static class Program
                 }
                 catch (Exception ex) when (Serial.IsSerialException(ex))
                 {
-                    Log.Error(LogCategory.Serial, $"Serial session error: {ex.Message}");
+                    Log.Serial.Error(ex, "Serial session error.");
                 }
                 finally
                 {
@@ -283,7 +292,7 @@ internal static class Program
 
                 if (!cts.Token.IsCancellationRequested)
                 {
-                    Log.Warn(LogCategory.Serial, $"Serial disconnected. Retrying: {portName}");
+                    Log.Serial.Warn("Serial disconnected. Retrying: {PortName}", portName);
                     await Task.Delay(Config.TimingReconnectDelayMs, cts.Token);
                 }
             }
@@ -293,7 +302,7 @@ internal static class Program
         }
         finally
         {
-            Log.Info(LogCategory.System, "Stopping agent.");
+            Log.System.Info("Stopping agent.");
             // Tear down UI in reverse-startup order:
             //  1. GuiHost  -- close the WPF window, shut its dispatcher.
             //  2. TrayIcon -- remove the tray icon and destroy the

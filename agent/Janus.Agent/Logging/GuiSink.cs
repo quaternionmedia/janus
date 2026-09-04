@@ -1,7 +1,9 @@
 using Janus.Agent.Gui;
 using Serilog.Core;
 using Serilog.Events;
+using Serilog.Parsing;
 using System.Globalization;
+using System.IO;
 
 namespace Janus.Agent.Logging;
 
@@ -36,7 +38,7 @@ internal sealed class GuiSink : ILogEventSink
     {
         LogCategory category = ExtractCategory(logEvent);
         LogLevel level = MapLevel(logEvent.Level);
-        string message = logEvent.RenderMessage(CultureInfo.InvariantCulture);
+        string message = RenderMessageLiterally(logEvent);
 
         LogSink.Write(new LogLine(
             Timestamp: logEvent.Timestamp.DateTime,
@@ -66,4 +68,32 @@ internal sealed class GuiSink : ILogEventSink
         LogEventLevel.Debug       => LogLevel.Debug,
         _                         => LogLevel.Verbose,
     };
+
+    private static string RenderMessageLiterally(LogEvent logEvent)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        foreach (MessageTemplateToken token in logEvent.MessageTemplate.Tokens)
+        {
+            if (token is PropertyToken propToken
+                && logEvent.Properties.TryGetValue(propToken.PropertyName, out LogEventPropertyValue? value))
+            {
+                // ScalarValue with a string payload: render raw (no quotes).
+                // Everything else: fall through to Serilog's default renderer,
+                // which handles numbers, structured objects, dictionaries, etc.
+                if (value is ScalarValue { Value: string s })
+                {
+                    writer.Write(s);
+                }
+                else
+                {
+                    value.Render(writer, propToken.Format, CultureInfo.InvariantCulture);
+                }
+            }
+            else
+            {
+                token.Render(logEvent.Properties, writer, CultureInfo.InvariantCulture);
+            }
+        }
+        return writer.ToString();
+    }
 }

@@ -32,26 +32,27 @@ internal static class Log
     public static readonly CategoryLogger Mouse     = new(LogCategory.Mouse);
     public static readonly CategoryLogger System    = new(LogCategory.System);
 
-    // ---- LEGACY SHIMS (deleted at end of commit 4) -----------------
+    // ---- DEBUG SHORTCUTS --------------------------------
     //
-    // These forward the sub-step-1b syntax to the new wrappers so
-    // producer files continue to compile between commits 3 and 4.
+    // Quick-grab logging that skips category selection when you're
+    // mid-debug and don't want to think about categories. 
+    //
+    // Use sparingly. The whole reason CategoryLogger exists is to make
+    // categorization compile-time-required; these shortcuts opt out of
+    // that, so they're for temporary debug lines rather than shipped
+    // producer code.
 
-    public static void Verbose(LogCategory category, string message) => Get(category).Verbose(message);
-    public static void Debug  (LogCategory category, string message) => Get(category).Debug(message);
-    public static void Info   (LogCategory category, string message) => Get(category).Info(message);
-    public static void Warn   (LogCategory category, string message) => Get(category).Warn(message);
-    public static void Error  (LogCategory category, string message) => Get(category).Error(message);
+    public static void Verbose(string template, params object?[] args) => System.Verbose(template, args);
+    public static void Debug  (string template, params object?[] args) => System.Debug(template, args);
+    public static void Info   (string template, params object?[] args) => System.Info(template, args);
+    public static void Warn   (string template, params object?[] args) => System.Warn(template, args);
+    public static void Error  (string template, params object?[] args) => System.Error(template, args);
 
-    private static CategoryLogger Get(LogCategory category) => category switch
-    {
-        LogCategory.Serial    => Serial,
-        LogCategory.Switch    => Switch,
-        LogCategory.Clipboard => Clipboard,
-        LogCategory.Keyboard  => Keyboard,
-        LogCategory.Mouse     => Mouse,
-        _                     => System,
-    };
+    // Exception overloads follow Serilog's convention: exception first,
+    // then template + args. Preserves the stack trace in structured
+    // output rather than baking it into the message string.
+    public static void Warn (Exception ex, string template, params object?[] args) => System.Warn(ex, template, args);
+    public static void Error(Exception ex, string template, params object?[] args) => System.Error(ex, template, args);
 }
 
 internal sealed class CategoryLogger
