@@ -1,9 +1,14 @@
 ﻿using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
 using Janus.Agent.Gui;
+using Janus.Agent.Logging;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
 using Janus.Agent.Tray;
+using Microsoft.Extensions.Configuration;
+using Serilog;
+using Serilog.Formatting.Compact;
+using System.IO;
 using System.IO.Ports;
 
 namespace Janus.Agent;
@@ -25,8 +30,9 @@ namespace Janus.Agent;
 //   TrayIcon        -- NotifyIcon + Win32 popup menu, primary
 //                      user-facing UI
 //   GuiHost         -- dispatcher thread + WPF logs/status window
-//   LogSink         -- in-process ring buffer of Console.WriteLine output
-//   TeeWriter       -- forwards Console.Out to the real console AND the sink
+//   LogSink         -- in-process ring buffer feeding the GUI
+//   GuiSink         -- Serilog sink that pushes LogEvents into LogSink
+//   Log             -- structured logging facade over Serilog
 //   Config          -- appsettings.json -> static properties
 //   Win32           -- P/Invoke surface
 //
@@ -49,24 +55,79 @@ internal static class Program
         string deviceId = args.Length > 0 ? args[0].ToUpperInvariant() : "P";
         string portName = args.Length > 1 ? args[1] : string.Empty;
 
+        // Argument validation runs BEFORE Serilog is configured (which
+        // needs appsettings.json to have loaded). These errors go to
+        // raw stdout only -- fine, because the process exits immediately.
         if (deviceId != "P" && deviceId != "W")
         {
-            Log.Error(LogCategory.System, "Invalid device id. Use 'P' or 'W'.");
+            Console.WriteLine("Invalid device id. Use 'P' or 'W'.");
             return;
         }
 
         if (string.IsNullOrWhiteSpace(portName))
         {
-            Log.Error(LogCategory.System, "Missing COM port. Example: P COM9");
+            Console.WriteLine("Missing COM port. Example: P COM9");
             return;
         }
 
-        // Install the TeeWriter as the FIRST thing we do after argument
-        // validation. Every Console.WriteLine from now on flows to both
-        // the (silent in WinExe) real console buffer and the LogSink
-        // that the GUI tails. Done before any other module starts so
-        // we don't miss startup log lines.
-        Console.SetOut(new TeeWriter(Console.Out));
+        // ---- Serilog + logging pipeline ----------------------------------
+        //
+        // Order matters here:
+        //   1. Build IConfiguration from appsettings.json.
+        //   2. Build the Serilog logger and assign it to Serilog.Log.Logger
+        //      BEFORE anything constructs a CategoryLogger (which reads
+        //      Serilog.Log to build its ForContext scope).
+        //   3. In Production only, install SerilogConsoleTee on Console.Out
+        //      so stray writelines still land in the log store. In
+        //      Development, skip the tee -- Serilog's own Console sink
+        //      writes to stdout, and routing that back through the tee
+        //      would recurse.
+
+        IConfigurationRoot appConfig = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+
+        string envName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+        bool isDevelopment = envName.Equals("Development", StringComparison.OrdinalIgnoreCase);
+        
+        // Log path: user-configurable via Logging:OutputPath in appsettings.
+        // Blank / missing = default under %LOCALAPPDATA%\Janus\logs. Custom
+        // paths are run through ExpandEnvironmentVariables so users can write
+        // "%USERPROFILE%\Documents\Janus" etc. Serilog's File sink itself
+        // doesn't expand env vars, which is why we handle it here.
+        string? configuredLogDir = appConfig["Janus:LogOutputPath"];
+        string logDir = string.IsNullOrWhiteSpace(configuredLogDir)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Janus", "logs")
+            : Environment.ExpandEnvironmentVariables(configuredLogDir);
+        Directory.CreateDirectory(logDir);
+        string logPath = Path.Combine(logDir, "agent-.jsonl");
+
+        LoggerConfiguration loggerConfig = new LoggerConfiguration()
+            .ReadFrom.Configuration(appConfig)
+            .WriteTo.File(
+                formatter: new CompactJsonFormatter(),
+                path: logPath,
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 30,
+                shared: true)
+            .WriteTo.Sink(new GuiSink());
+
+        if (isDevelopment)
+        {
+            loggerConfig = loggerConfig.WriteTo.Console(
+                outputTemplate:
+                    "{Timestamp:HH:mm:ss} | {Level:u4} | {Category,-9} : {Message:lj}{NewLine}{Exception}");
+        }
+
+        Serilog.Log.Logger = loggerConfig.CreateLogger();
+
+        if (!isDevelopment)
+        {
+            Console.SetOut(new SerilogConsoleTee());
+        }
 
         // Signal dark-mode capability to Windows. After this call, the
         // OS will render native popup menus (used by our tray icon via
@@ -109,9 +170,8 @@ internal static class Program
         Log.Info(LogCategory.System, $"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
             + (Config.ClipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
         Log.Info(LogCategory.System, $"switch devices: console key '{Config.SwitchConsoleKey}'"
-            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled")
-            + "\n");
-        
+            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
+
         // ---- Composition -------------------------------------------------
 
         MessageWindow.Start();
@@ -180,7 +240,7 @@ internal static class Program
                     continue;
                 }
 
-                Log.Info(LogCategory.Serial, $"\nSerial connected: {portName}");
+                Log.Info(LogCategory.Serial, $"Serial connected: {portName}");
                 Serial.BeginSession(port, deviceId);
 
                 // Seed the sync hash with the current clipboard so whatever
@@ -244,6 +304,9 @@ internal static class Program
             GuiHost.Stop();
             TrayIcon.Stop();
             MessageWindow.Stop();
+
+            // Flush any buffered log entries and release file handles.
+            Serilog.Log.CloseAndFlush();
         }
     }
 }

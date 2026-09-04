@@ -5,19 +5,18 @@ namespace Janus.Agent.Logging;
 // In-process log sink: a bounded ring buffer of LogLine records plus a
 // LineAdded event so the GUI can tail without polling.
 //
-// Two entry points:
-//   * Write(LogLine)    -- structured path used by Log.X
-//   * WriteLine(string) -- legacy fallback used by TeeWriter when raw
-//                          Console.WriteLine calls reach it (unmigrated
-//                          producers, third-party code, exception
-//                          messages). Wraps the string into a LogLine
-//                          with Level inferred from message text and
-//                          category defaulted to System.
+// The only entry point is Write(LogLine), called by GuiSink after
+// Serilog produces a LogEvent. There is no string-overload fallback
+// anymore -- everything is routed through Serilog now, and the old
+// Console.WriteLine-inference path (with its InferLevel heuristic)
+// went away in commit 3 when TeeWriter was replaced.
 //
 // Static-only state: the agent has a single process-wide log stream.
 // Multiple subscribers to LineAdded are supported; each invoke is
-// try/catch-guarded so a misbehaving subscriber can't take down the
-// logging path.
+// wrapped in try/catch so a misbehaving subscriber can't take the
+// logging path down. Subscriber exceptions are surfaced via
+// Debug.WriteLine so they appear in a debugger's Output window
+// without recursing back into the logging pipeline.
 //
 // Capacity default 5000 lines. Typical session produces a few hundred
 // lines/hour; 5000 gives multi-hour history. LogLine is a small record;
@@ -35,7 +34,8 @@ internal static class LogSink
     /// their own dispatcher.</summary>
     public static event Action<LogLine>? LineAdded;
 
-    /// <summary>Structured append. Called by Log.X.</summary>
+    /// <summary>Append a line to the buffer. Called by GuiSink from
+    /// Serilog's emission path.</summary>
     public static void Write(LogLine line)
     {
         lock (_lock)
@@ -53,26 +53,13 @@ internal static class LogSink
         }
         catch (Exception ex)
         {
-            // If a subscriber throws, we don't want to take down the logging path. 
-            // Log the error to Debug output and continue.
-            // Note: We cannot use Log.Error here because it would cause a recursive call to Write.
+            // A failing subscriber must never break the logging path
+            // (this is where errors get reported). Debug.WriteLine
+            // surfaces in a debugger's Output window without looping
+            // back into Serilog / LogSink and re-triggering the same
+            // failure.
             System.Diagnostics.Debug.WriteLine($"LogSink subscriber error: {ex.Message}");
         }
-    }
-
-    /// <summary>Legacy fallback append. Called by TeeWriter for raw
-    /// Console.WriteLine output. Infers Level from message text so error
-    /// lines still render red until every producer migrates to Log.X;
-    /// once migration is complete, the InferLevel heuristic can be
-    /// deleted and this overload can go with it.</summary>
-    public static void WriteLine(string line)
-    {
-        Write(new LogLine(
-            Timestamp: DateTime.Now,
-            Level: InferLevel(line),
-            Category: LogCategory.System,
-            Source: LogSource.Agent,
-            Message: line ?? string.Empty));
     }
 
     /// <summary>Snapshot of all lines currently in the buffer, in
@@ -82,25 +69,7 @@ internal static class LogSink
     {
         lock (_lock)
         {
-            return [.. _lines];
+            return _lines.ToArray();
         }
-    }
-
-    // ---- Fallback level inference (transient) ------------------------
-    //
-    // Keeps error/failure lines rendered red in the GUI even before
-    // producers are migrated to Log.Error. Anything else gets Info.
-    // Delete this method once sub-step 1b is finished.
-
-    private static LogLevel InferLevel(string? line)
-    {
-        if (string.IsNullOrEmpty(line)) return LogLevel.Info;
-        if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
-        {
-            return LogLevel.Error;
-        }
-        return LogLevel.Info;
     }
 }
