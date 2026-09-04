@@ -1,18 +1,15 @@
-using Janus.Agent.Logging;
 using Janus.Agent.Platform;
-using Janus.Agent.Settings;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
 using System.Windows.Threading;
 using Brush = System.Windows.Media.Brush;
 
-namespace Janus.Agent.Gui;
+namespace Janus.Agent.Gui.ViewModels;
 
-// View model behind GuiWindow. Holds the observable state the XAML
-// binds to:
+// View model behind MainView. Holds the observable state MainView's
+// XAML binds to:
 //
 //   Status group:      StatusText, StatusDot, PortInfo, IsConnected
 //   This-PC group:     ThisPc
@@ -20,24 +17,18 @@ namespace Janus.Agent.Gui;
 //   Last activity:     LastActivity
 //   Log:               LogLines (ObservableCollection<LogLine>)
 //   Search:            SearchText -- live filter over the log
-//   Settings display:  Cfg* properties (read-only snapshots of Config)
 //
 // Two update paths into the live state:
 //   * Periodic (500 ms DispatcherTimer) -- refreshes the status group
 //     and IsConnected from Serial's statics.
 //   * Reactive (LogSink.LineAdded) -- appends a new LogLine to the
-//     collection, marshalling onto the dispatcher. The LogSink event
-//     now carries a structured LogLine (was a raw string pre-1a); the
-//     categorization-from-message inference has moved to LogSink's
-//     own fallback path and is scheduled for deletion once every
-//     producer uses Log.X.
+//     collection, marshalling onto the dispatcher.
 //
-// The Cfg* properties are static snapshots: Config is loaded once at
-// startup and doesn't change during runtime, so we don't bother with
-// INPC notifications for them. If/when #3d adds live config editing,
-// they'll need to start raising change events.
+// Settings-modal Cfg* properties moved out of this VM in the stage 1
+// split; they now live on GuiViewModel because the modal is a
+// window-level UI element (shared across Main and Diag tabs).
 
-internal sealed class GuiViewModel : INotifyPropertyChanged
+internal sealed class MainViewModel : INotifyPropertyChanged
 {
     private const int MaxLinesDisplayed = 5000;
 
@@ -65,7 +56,7 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         private set { if (!ReferenceEquals(_statusDot, value)) { _statusDot = value; Raise(); } }
     }
 
-    private string _portInfo = "—";
+    private string _portInfo = "\u2014";
     public string PortInfo
     {
         get => _portInfo;
@@ -79,7 +70,7 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         private set { if (_thisPc != value) { _thisPc = value; Raise(); } }
     }
 
-    private string _activeTarget = "—";
+    private string _activeTarget = "\u2014";
     public string ActiveTarget
     {
         get => _activeTarget;
@@ -93,17 +84,18 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         private set { if (_activeTargetSuffix != value) { _activeTargetSuffix = value; Raise(); } }
     }
 
-    private string _lastActivity = "—";
+    private string _lastActivity = "\u2014";
     public string LastActivity
     {
         get => _lastActivity;
         private set { if (_lastActivity != value) { _lastActivity = value; Raise(); } }
     }
 
-    // Bound to the action buttons' IsEnabled. When the serial port is
-    // down, Switch / Send-clipboard / Reconnect would all be no-ops on
-    // their underlying static methods (they early-out if ActivePort is
-    // null). Disabling the buttons makes that visible to the user.
+    // Bound to the action buttons' IsEnabled through DataContext
+    // inheritance into the ActionsPanel UserControl. When the serial
+    // port is down, Switch / Send-clipboard / Reconnect would all be
+    // no-ops on their underlying static methods; disabling the buttons
+    // makes that state visible.
     private bool _isConnected;
     public bool IsConnected
     {
@@ -122,64 +114,20 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
             if (_searchText == value) return;
             _searchText = value;
             Raise();
-            // Trigger a re-evaluation of the filter predicate against
-            // every item in LogLines. Cheap enough for our 5000-line
-            // cap; if profiling ever shows it as a hot path, swap to a
-            // debounced refresh.
             CollectionViewSource.GetDefaultView(LogLines).Refresh();
         }
     }
 
-    // ---- Settings display (read-only snapshots of Config) ------------
-
-    // Connection
-    public string CfgBaud           => Config.SerialBaud.ToString("N0", CultureInfo.InvariantCulture);
-    public string CfgReadTimeout    => $"{Config.SerialReadTimeoutMs} ms";
-    public string CfgWriteTimeout   => $"{Config.SerialWriteTimeoutMs} ms";
-    public string CfgReadBuffer     => FormatBytes(Config.SerialReadBufferSize);
-    public string CfgWriteBuffer    => FormatBytes(Config.SerialWriteBufferSize);
-
-    // Switch triggers
-    public string CfgOnLock         => Config.SwitchOnLock ? "Enabled" : "Disabled";
-    public string CfgOnShutdown     => Config.SwitchOnShutdown ? "Enabled" : "Disabled";
-    public string CfgSwitchConsole  => $"'{Config.SwitchConsoleKey}'";
-    public string CfgSwitchHotkey   => Config.SwitchHotkeyEnabled
-        ? FormatHotkey(Config.SwitchHotkeyCtrl, Config.SwitchHotkeyShift, Config.SwitchHotkeyAlt, Config.SwitchHotkeyKey)
-        : "Disabled";
-
-    // Clipboard
-    public string CfgOutboundMode   => Config.ClipboardOutboundMode.ToString();
-    public string CfgAutoSyncBytes  => FormatBytes(Config.ClipboardAutoSyncBytes);
-    public string CfgMaxBytes       => FormatBytes(Config.ClipboardMaxBytes);
-    public string CfgPushConsole    => $"'{Config.ClipboardPushConsoleKey}'";
-    public string CfgPushHotkey     => Config.ClipboardPushHotkeyEnabled
-        ? FormatHotkey(Config.ClipboardPushHotkeyCtrl, Config.ClipboardPushHotkeyShift, Config.ClipboardPushHotkeyAlt, Config.ClipboardPushHotkeyKey)
-        : "Disabled";
-
-    // Timing (advanced)
-    public string CfgMainTick           => $"{Config.TimingMainTickMs} ms";
-    public string CfgReconnectDelay     => $"{Config.TimingReconnectDelayMs} ms";
-    public string CfgCursorSendInterval => $"{Config.TimingCursorSendIntervalMs} ms";
-    public string CfgCursorKeepalive    => $"{Config.TimingCursorKeepaliveSeconds} s";
-    public string CfgDisplayRefresh     => $"{Config.TimingDisplayRefreshSeconds} s";
-
     // ---- Construction ------------------------------------------------
 
-    public GuiViewModel(Dispatcher dispatcher, string deviceId)
+    public MainViewModel(Dispatcher dispatcher, string deviceId)
     {
         _dispatcher = dispatcher;
         ThisPc = deviceId == "P" ? "Personal (P)" : "Work (W)";
 
-        // Install the log filter on the default view of LogLines.
-        // ItemsControl bindings to "LogLines" automatically go through
-        // this default view, so the predicate is consulted on every
-        // collection-change event.
         var view = CollectionViewSource.GetDefaultView(LogLines);
         view.Filter = LogFilter;
 
-        // Seed the log with any history that accumulated before the
-        // GUI started. Snapshot now returns structured LogLine records
-        // directly -- no wrap/categorize step needed.
         foreach (LogLine line in LogSink.Snapshot())
         {
             LogLines.Add(line);
@@ -210,9 +158,6 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
     {
         if (item is not LogLine line) return false;
         if (string.IsNullOrEmpty(_searchText)) return true;
-        // Case-insensitive substring match against the message text.
-        // Timestamp/level/category/source aren't searched -- those are
-        // for the diagnostics view's structured filters (Phase 3).
         return line.Message.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -254,12 +199,12 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         IsConnected = connected;
         StatusText = connected ? "Connected" : "Disconnected";
         StatusDot = connected ? LogLineColors.Success : LogLineColors.Error;
-        PortInfo = connected ? $"{port!.PortName} · {port.BaudRate}" : "—";
+        PortInfo = connected ? $"{port!.PortName} \u00B7 {port.BaudRate}" : "\u2014";
 
         string? currentTarget = Serial.CurrentTarget;
         if (currentTarget is null)
         {
-            ActiveTarget = "—";
+            ActiveTarget = "\u2014";
             ActiveTargetSuffix = string.Empty;
         }
         else if (Serial.IsActiveTarget)
@@ -275,37 +220,18 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
 
         DateTime lastUtc = Serial.LastActivityUtc;
         LastActivity = lastUtc == DateTime.MinValue
-            ? "—"
+            ? "\u2014"
             : FormatRelative(DateTime.UtcNow - lastUtc);
     }
 
     private static string FormatRelative(TimeSpan since)
     {
-        if (since.TotalSeconds < 0) return "just now";      // clock jitter guard
+        if (since.TotalSeconds < 0) return "just now";
         if (since.TotalSeconds < 2)  return "just now";
         if (since.TotalSeconds < 60) return $"{(int)since.TotalSeconds} sec ago";
         if (since.TotalMinutes < 60) return $"{(int)since.TotalMinutes} min ago";
         if (since.TotalHours < 24)   return $"{(int)since.TotalHours} hr ago";
         return $"{(int)since.TotalDays} d ago";
-    }
-
-    // ---- Formatting helpers ------------------------------------------
-
-    private static string FormatHotkey(bool ctrl, bool shift, bool alt, string key)
-    {
-        var parts = new List<string>(4);
-        if (ctrl)  parts.Add("Ctrl");
-        if (shift) parts.Add("Shift");
-        if (alt)   parts.Add("Alt");
-        parts.Add(key);
-        return string.Join("+", parts);
-    }
-
-    private static string FormatBytes(int bytes)
-    {
-        if (bytes >= 1024 * 1024) return $"{bytes / 1024 / 1024} MB";
-        if (bytes >= 1024)        return $"{bytes / 1024} KB";
-        return $"{bytes} B";
     }
 
     // ---- INPC plumbing -----------------------------------------------

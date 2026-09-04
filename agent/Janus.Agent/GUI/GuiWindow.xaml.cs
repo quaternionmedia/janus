@@ -1,11 +1,7 @@
-using Janus.Agent.Clipboard;
-using Janus.Agent.Events;
-using Janus.Agent.Platform;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
@@ -14,24 +10,16 @@ using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 
 namespace Janus.Agent.Gui;
 
-// Code-behind for GuiWindow.xaml. Five responsibilities:
+// Shell for the WPF window. In stage 1 this is deliberately thin --
+// it hosts a single MainView, wires up window-level chrome (dark
+// title bar, icon, close-to-tray), and owns the settings modal that
+// both current and future tabs will open.
 //
-// 1. Close-to-tray. Overriding OnClosing cancels the close and hides
-//    the window. ForceClose (called from GuiHost.Stop) is the only
-//    path to a real close.
-//
-// 2. Auto-scroll. The log panel sticks to the bottom when new lines
-//    arrive, unless the user has scrolled up to inspect history.
-//
-// 3. Window icon + dark title bar. Loaded from Resources/janus_lg.ico
-//    and applied via DwmSetWindowAttribute on OnSourceInitialized.
-//
-// 4. Action button dispatch. Switch / Send clipboard / Reconnect
-//    buttons in the sidebar call the same static methods the tray
-//    menu does.
-//
-// 5. Settings modal. Gear icon in the sidebar footer shows it; X
-//    button, backdrop click, or Esc key hides it.
+// Modal-open is decoupled from ActionsPanel via a bubbling RoutedEvent
+// (ActionsPanel.SettingsRequestedEvent). AddHandler on the window
+// itself catches the event no matter which nested ActionsPanel fired
+// it, which lets stage 2's DiagnosticsView reuse the same plumbing
+// with zero additional wiring.
 
 public partial class GuiWindow : Window
 {
@@ -46,9 +34,8 @@ public partial class GuiWindow : Window
 
     // ---- State -----------------------------------------------------
 
-    private readonly GuiViewModel _viewModel;
+    private readonly GuiViewModel _viewModel = new();
     private bool _forceClosing;
-    private bool _wasAtBottom = true;
 
     // ---- Construction ----------------------------------------------
 
@@ -56,21 +43,28 @@ public partial class GuiWindow : Window
     {
         InitializeComponent();
 
-        _viewModel = new GuiViewModel(Dispatcher, deviceId);
+        // Window's own DataContext feeds the settings modal (Cfg*
+        // properties). MainView's DataContext is set inside MainView
+        // itself, so those bindings don't inherit from here.
         DataContext = _viewModel;
-        Title = $"Janus.Agent ({deviceId})";
 
-        LoadWindowIcon();
-    }
+        // Catch bubbled SettingsRequested events from any nested
+        // ActionsPanel (currently one; stage 2 will have two).
+        AddHandler(ActionsPanel.SettingsRequestedEvent,
+            new RoutedEventHandler(ActionsPanel_SettingsRequested));
 
-    private void LoadWindowIcon()
-    {
+        // Escape closes the modal if it's open. KeyDown at the window
+        // level catches it regardless of focus location.
+        KeyDown += GuiWindow_KeyDown;
+
+        // Load the window icon. Missing/corrupt file logs a warning
+        // and falls back to Windows' default.
         try
         {
             string iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "janus_lg.ico");
             if (File.Exists(iconPath))
             {
-                Icon = new BitmapImage(new Uri(iconPath, UriKind.Absolute));
+                Icon = new BitmapImage(new Uri(iconPath));
             }
             else
             {
@@ -83,22 +77,21 @@ public partial class GuiWindow : Window
         }
     }
 
-    // ---- Lifecycle hooks -------------------------------------------
+    // ---- Dark title bar ---------------------------------------------
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        TryApplyDarkTitleBar();
-    }
 
-    private void TryApplyDarkTitleBar()
-    {
         try
         {
             IntPtr hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd == IntPtr.Zero) return;
 
             int useDark = 1;
+
+            // Try the modern attribute first (Windows 10 build 19041+).
+            // Falls back to the pre-19041 attribute if that fails.
             int hr = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
             if (hr != 0)
             {
@@ -111,13 +104,7 @@ public partial class GuiWindow : Window
         }
     }
 
-    /// <summary>Permanently close the window. Called by GuiHost.Stop
-    /// at agent shutdown.</summary>
-    internal void ForceClose()
-    {
-        _forceClosing = true;
-        try { Close(); } catch { }
-    }
+    // ---- Close-to-tray ---------------------------------------------
 
     protected override void OnClosing(CancelEventArgs e)
     {
@@ -125,91 +112,22 @@ public partial class GuiWindow : Window
         {
             e.Cancel = true;
             Hide();
-            return;
         }
-        _viewModel.Shutdown();
         base.OnClosing(e);
     }
 
-    // ---- Esc key: close settings modal if open ----------------------
-
-    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    /// <summary>Called by GuiHost.Stop to actually close the window
+    /// rather than hiding it. OnClosing checks this flag to decide.</summary>
+    public void ForceClose()
     {
-        if (e.Key == Key.Escape && SettingsModal.Visibility == Visibility.Visible)
-        {
-            HideSettingsModal();
-            e.Handled = true;
-            return;
-        }
-        base.OnPreviewKeyDown(e);
-    }
-
-    // ---- Auto-scroll behavior --------------------------------------
-
-    private void LogScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        bool extentChanged = Math.Abs(e.ExtentHeightChange) > 0.001;
-
-        if (extentChanged)
-        {
-            if (_wasAtBottom)
-            {
-                LogScrollViewer.ScrollToBottom();
-            }
-            return;
-        }
-
-        bool atBottom = IsAtBottom();
-        if (atBottom != _wasAtBottom)
-        {
-            _wasAtBottom = atBottom;
-            AutoScrollCheck.IsChecked = atBottom;
-        }
-    }
-
-    private void AutoScrollCheck_Click(object sender, RoutedEventArgs e)
-    {
-        bool nowChecked = AutoScrollCheck.IsChecked == true;
-        _wasAtBottom = nowChecked;
-        if (nowChecked)
-        {
-            LogScrollViewer.ScrollToBottom();
-        }
-    }
-
-    private bool IsAtBottom()
-    {
-        if (LogScrollViewer.ScrollableHeight <= 0) return true;
-        return LogScrollViewer.VerticalOffset >= LogScrollViewer.ScrollableHeight - 1;
-    }
-
-    // ---- Action button handlers ------------------------------------
-    //
-    // Mirror the tray menu's behavior exactly. The static methods log
-    // a "(source)" tag so the GUI's invocations show as "(gui)" in
-    // the log -- easy to distinguish from tray clicks or hotkeys.
-
-    private void SwitchAction_Click(object sender, RoutedEventArgs e)
-    {
-        try { Actions.SwitchToPeer("gui"); }
-        catch (Exception ex) { Log.System.Error(ex, "GUI switch action error."); }
-    }
-
-    private void ClipboardAction_Click(object sender, RoutedEventArgs e)
-    {
-        try { ClipboardSync.Push("gui"); }
-        catch (Exception ex) { Log.Clipboard.Error(ex, "GUI clipboard action error."); }
-    }
-
-    private void ReconnectAction_Click(object sender, RoutedEventArgs e)
-    {
-        try { Serial.RequestReconnect(); }
-        catch (Exception ex) { Log.Serial.Error(ex, "GUI reconnect action error."); }
+        _forceClosing = true;
+        MainViewInstance.Shutdown();
+        Close();
     }
 
     // ---- Settings modal --------------------------------------------
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    private void ActionsPanel_SettingsRequested(object sender, RoutedEventArgs e)
     {
         ShowSettingsModal();
     }
@@ -225,6 +143,15 @@ public partial class GuiWindow : Window
         // panel Border draws on top of it (later in document order),
         // so clicks that land on the panel don't reach this handler.
         HideSettingsModal();
+    }
+
+    private void GuiWindow_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && SettingsModal.Visibility == Visibility.Visible)
+        {
+            HideSettingsModal();
+            e.Handled = true;
+        }
     }
 
     private void ShowSettingsModal()

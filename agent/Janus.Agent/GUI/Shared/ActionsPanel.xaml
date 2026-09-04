@@ -1,0 +1,96 @@
+<UserControl x:Class="Janus.Agent.Gui.Shared.ActionsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/GUI/Shared/SharedStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <!--
+        Two-row layout: action buttons on top, footer with version +
+        gear on the bottom. Bindings for IsConnected reach up through
+        DataContext inheritance - the parent view (MainView /
+        DiagnosticsView) sets its DataContext to a ViewModel that
+        exposes IsConnected.
+
+        The settings gear raises a bubbling RoutedEvent
+        (SettingsRequested) that the root window catches and uses to
+        open the shared settings modal. Keeps the modal at window
+        level so both tabs open the same instance.
+    -->
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Actions -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="ACTIONS" Style="{StaticResource SectionLabel}" Margin="0,0,0,8"/>
+            <Button Style="{StaticResource ActionButton}"
+                    Margin="0,0,0,4"
+                    IsEnabled="{Binding IsConnected}"
+                    Click="SwitchAction_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE8AB;" FontFamily="{StaticResource IconFont}"
+                               Foreground="{StaticResource MutedBrush}" FontSize="13"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBlock Text="Switch to peer" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+            <Button Style="{StaticResource ActionButton}"
+                    Margin="0,0,0,4"
+                    IsEnabled="{Binding IsConnected}"
+                    Click="ClipboardAction_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE16F;" FontFamily="{StaticResource IconFont}"
+                               Foreground="{StaticResource MutedBrush}" FontSize="13"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBlock Text="Send clipboard" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+            <Button Style="{StaticResource ActionButton}"
+                    IsEnabled="{Binding IsConnected}"
+                    Click="ReconnectAction_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}"
+                               Foreground="{StaticResource MutedBrush}" FontSize="13"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBlock Text="Reconnect" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+        </StackPanel>
+
+        <!-- Footer: version on left, settings gear on right -->
+        <Border Grid.Row="1"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="0,8,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="Janus.Agent &#xB7; v0.1"
+                           Foreground="{StaticResource FaintBrush}"
+                           FontSize="11"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="1"
+                        Style="{StaticResource IconButton}"
+                        ToolTip="Settings"
+                        Click="SettingsButton_Click">
+                    <TextBlock Text="&#xE713;"
+                               FontFamily="{StaticResource IconFont}"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="14"/>
+                </Button>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -1,0 +1,151 @@
+<UserControl x:Class="Janus.Agent.Gui.Views.MainView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shared="clr-namespace:Janus.Agent.Gui.Shared">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/GUI/Shared/SharedStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <!--
+        Two-column layout: sidebar (220px) + log pane. The sidebar's
+        top section shows connection status + this-PC identity + active
+        target + last activity. Bottom section is the shared
+        ActionsPanel (buttons + settings gear footer).
+    -->
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ============ SIDEBAR ============ -->
+        <Border Grid.Column="0"
+                Background="{StaticResource SidebarBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="18,18,18,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Status sections (top) -->
+                <StackPanel Grid.Row="0">
+                    <TextBlock Text="STATUS" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                        <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding StatusDot}"/>
+                        <TextBlock Text="{Binding StatusText}" Margin="8,0,0,0" Style="{StaticResource SidebarText}"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding PortInfo}" Foreground="{StaticResource FaintBrush}" FontSize="11" Margin="16,0,0,18"/>
+
+                    <TextBlock Text="THIS PC" Style="{StaticResource SectionLabel}"/>
+                    <TextBlock Text="{Binding ThisPc}" Style="{StaticResource SidebarText}" Margin="0,0,0,18"/>
+
+                    <TextBlock Text="ACTIVE TARGET" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                        <TextBlock Text="{Binding ActiveTarget}" Foreground="{StaticResource AccentBlue}" FontWeight="Medium" FontSize="13"/>
+                        <TextBlock Text="{Binding ActiveTargetSuffix}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="8,1,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <TextBlock Text="LAST ACTIVITY" Style="{StaticResource SectionLabel}"/>
+                    <TextBlock Text="{Binding LastActivity}" Style="{StaticResource SidebarText}"/>
+                </StackPanel>
+
+                <!-- Spacer -->
+                <Grid Grid.Row="1"/>
+
+                <!-- Actions + settings footer -->
+                <shared:ActionsPanel Grid.Row="2"/>
+            </Grid>
+        </Border>
+
+        <!-- ============ LOG ============ -->
+        <Grid Grid.Column="1" Background="{StaticResource BodyBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Log header -->
+            <Border Grid.Row="0"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="14,10,14,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="LOG"
+                               Style="{StaticResource SectionLabel}"
+                               Margin="0,2,16,0"
+                               VerticalAlignment="Center"/>
+
+                    <Grid Grid.Column="1" Width="220" VerticalAlignment="Center">
+                        <TextBox x:Name="SearchBox"
+                                 Style="{StaticResource DarkTextBox}"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                        <TextBlock IsHitTestVisible="False"
+                                   Text="filter log&#x2026;"
+                                   Foreground="{StaticResource FaintBrush}"
+                                   FontFamily="Cascadia Mono, Consolas, Lucida Console, Courier New"
+                                   FontSize="11.5"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <CheckBox Grid.Column="3"
+                              x:Name="AutoScrollCheck"
+                              IsChecked="True"
+                              VerticalAlignment="Center"
+                              Style="{StaticResource LabelCheckBox}"
+                              Click="AutoScrollCheck_Click"/>
+                </Grid>
+            </Border>
+
+            <!-- Log content -->
+            <ScrollViewer x:Name="LogScrollViewer"
+                          Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Auto"
+                          ScrollChanged="LogScrollViewer_ScrollChanged"
+                          Padding="14,8,14,8"
+                          Background="Transparent">
+                <ItemsControl ItemsSource="{Binding LogLines}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Style="{StaticResource LogRowText}"><Run Text="{Binding Prefix, Mode=OneWay}" Foreground="{StaticResource MutedBrush}"/><Run Text="{Binding Message, Mode=OneWay}" Foreground="{Binding Foreground}"/></TextBlock>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>
