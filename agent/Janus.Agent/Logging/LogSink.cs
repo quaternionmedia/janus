@@ -51,11 +51,12 @@ internal static class LogSink
         {
             LineAdded?.Invoke(line);
         }
-        catch
+        catch (Exception ex)
         {
-            // A failing subscriber must never break the logging path
-            // (which is the only place errors get reported in the
-            // first place). Swallow and move on.
+            // If a subscriber throws, we don't want to take down the logging path. 
+            // Log the error to Debug output and continue.
+            // Note: We cannot use Log.Error here because it would cause a recursive call to Write.
+            System.Diagnostics.Debug.WriteLine($"LogSink subscriber error: {ex.Message}");
         }
     }
 

@@ -1,7 +1,6 @@
 ﻿using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
 using Janus.Agent.Gui;
-using Janus.Agent.Logging;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
 using Janus.Agent.Tray;
@@ -52,13 +51,13 @@ internal static class Program
 
         if (deviceId != "P" && deviceId != "W")
         {
-            Console.WriteLine("Invalid device id. Use 'P' or 'W'.");
+            Log.Error(LogCategory.System, "Invalid device id. Use 'P' or 'W'.");
             return;
         }
 
         if (string.IsNullOrWhiteSpace(portName))
         {
-            Console.WriteLine("Missing COM port. Example: P COM9");
+            Log.Error(LogCategory.System, "Missing COM port. Example: P COM9");
             return;
         }
 
@@ -84,7 +83,7 @@ internal static class Program
             // uxtheme.dll missing on a non-desktop SKU, or the ordinal
             // changed in some future Windows update. Not fatal; menus
             // will just stay light.
-            Console.WriteLine($"SetPreferredAppMode failed: {ex.Message}");
+            Log.Warn(LogCategory.System, $"SetPreferredAppMode failed: {ex.Message}");
         }
 
         // Tool-window style + hide on the console window. Both are
@@ -104,15 +103,15 @@ internal static class Program
             cts.Cancel();
         };
 
-        Console.WriteLine($"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
-        Console.WriteLine($"serial port: {portName}");
-        Console.WriteLine($"clipboard outbound mode: {Config.ClipboardOutboundMode}");
-        Console.WriteLine($"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
+        Log.Info(LogCategory.System, $"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
+        Log.Info(LogCategory.System, $"serial port: {portName}");
+        Log.Info(LogCategory.System, $"clipboard outbound mode: {Config.ClipboardOutboundMode}");
+        Log.Info(LogCategory.System, $"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
             + (Config.ClipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
-        Console.WriteLine($"switch devices: console key '{Config.SwitchConsoleKey}'"
-            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
-        Console.WriteLine();
-
+        Log.Info(LogCategory.System, $"switch devices: console key '{Config.SwitchConsoleKey}'"
+            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled")
+            + "\n");
+        
         // ---- Composition -------------------------------------------------
 
         MessageWindow.Start();
@@ -142,13 +141,13 @@ internal static class Program
         if (Config.SwitchOnLock)
         {
             MessageWindow.RegisterLockListener(() => Actions.SwitchToPeer("lock"));
-            Console.WriteLine("switch on workstation lock: enabled");
+            Log.Info(LogCategory.System, "switch on workstation lock: enabled");
         }
 
         if (Config.SwitchOnShutdown)
         {
             MessageWindow.RegisterPowerEventListener(() => Actions.SwitchToPeer("shutdown"));
-            Console.WriteLine("switch on shutdown/suspend: enabled");
+            Log.Info(LogCategory.System, "switch on shutdown/suspend: enabled");
         }
 
         Actions.StartConsoleKeyReader(cts.Token);
@@ -181,8 +180,7 @@ internal static class Program
                     continue;
                 }
 
-                Console.WriteLine();
-                Console.WriteLine($"Serial connected: {portName}");
+                Log.Info(LogCategory.Serial, $"\nSerial connected: {portName}");
                 Serial.BeginSession(port, deviceId);
 
                 // Seed the sync hash with the current clipboard so whatever
@@ -211,7 +209,7 @@ internal static class Program
                 }
                 catch (Exception ex) when (Serial.IsSerialException(ex))
                 {
-                    Console.WriteLine($"Serial session error: {ex.Message}");
+                    Log.Error(LogCategory.Serial, $"Serial session error: {ex.Message}");
                 }
                 finally
                 {
@@ -225,7 +223,7 @@ internal static class Program
 
                 if (!cts.Token.IsCancellationRequested)
                 {
-                    Console.WriteLine($"Serial disconnected. Retrying: {portName}");
+                    Log.Warn(LogCategory.Serial, $"Serial disconnected. Retrying: {portName}");
                     await Task.Delay(Config.TimingReconnectDelayMs, cts.Token);
                 }
             }
@@ -235,7 +233,7 @@ internal static class Program
         }
         finally
         {
-            Console.WriteLine("Stopping agent.");
+            Log.Info(LogCategory.System, "Stopping agent.");
             // Tear down UI in reverse-startup order:
             //  1. GuiHost  -- close the WPF window, shut its dispatcher.
             //  2. TrayIcon -- remove the tray icon and destroy the

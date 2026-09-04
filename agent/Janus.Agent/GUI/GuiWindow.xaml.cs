@@ -74,12 +74,12 @@ public partial class GuiWindow : Window
             }
             else
             {
-                Console.WriteLine($"Window icon not found at {iconPath}; using default.");
+                Log.Warn(LogCategory.System, $"Window icon not found at {iconPath}; using default.");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Window icon load error: {ex.Message}; using default.");
+            Log.Warn(LogCategory.System, $"Window Icon Load Error: {ex.Message}; using default.");
         }
     }
 
@@ -107,7 +107,7 @@ public partial class GuiWindow : Window
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Dark title bar attribute error: {ex.Message}");
+            Log.Warn(LogCategory.System, $"Dark Title Bar Attribute Error: {ex.Message}");
         }
     }
 
@@ -177,7 +177,7 @@ public partial class GuiWindow : Window
         }
     }
 
-    private bool IsAtBottom()
+    private static bool IsAtBottom()
     {
         if (LogScrollViewer.ScrollableHeight <= 0) return true;
         return LogScrollViewer.VerticalOffset >= LogScrollViewer.ScrollableHeight - 1;
@@ -192,19 +192,19 @@ public partial class GuiWindow : Window
     private void SwitchAction_Click(object sender, RoutedEventArgs e)
     {
         try { Actions.SwitchToPeer("gui"); }
-        catch (Exception ex) { Console.WriteLine($"GUI switch action error: {ex.Message}"); }
+        catch (Exception ex) { Log.Error(LogCategory.System, $"GUI Switch Action Error: {ex.Message}"); }
     }
 
     private void ClipboardAction_Click(object sender, RoutedEventArgs e)
     {
         try { ClipboardSync.Push("gui"); }
-        catch (Exception ex) { Console.WriteLine($"GUI clipboard action error: {ex.Message}"); }
+        catch (Exception ex) { Log.Error(LogCategory.Clipboard, $"GUI Clipboard Action Error: {ex.Message}"); }
     }
 
     private void ReconnectAction_Click(object sender, RoutedEventArgs e)
     {
         try { Serial.RequestReconnect(); }
-        catch (Exception ex) { Console.WriteLine($"GUI reconnect action error: {ex.Message}"); }
+        catch (Exception ex) { Log.Error(LogCategory.Serial, $"GUI Reconnect Action Error: {ex.Message}"); }
     }
 
     // ---- Settings modal --------------------------------------------
@@ -227,12 +227,12 @@ public partial class GuiWindow : Window
         HideSettingsModal();
     }
 
-    private void ShowSettingsModal()
+    private static void ShowSettingsModal()
     {
         SettingsModal.Visibility = Visibility.Visible;
     }
 
-    private void HideSettingsModal()
+    private static void HideSettingsModal()
     {
         SettingsModal.Visibility = Visibility.Collapsed;
     }

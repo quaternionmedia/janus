@@ -122,7 +122,7 @@ internal static class Serial
         }
         catch (Exception ex) when (IsSerialException(ex))
         {
-            Console.WriteLine($"Open failed for {portName}: {ex.Message}");
+            Log.Warn(LogCategory.Serial, $"Open failed for {portName}: {ex.Message}");
             port?.Dispose();
             return null;
         }
@@ -155,7 +155,7 @@ internal static class Serial
             }
             catch (Exception ex) when (IsSerialException(ex))
             {
-                Console.WriteLine($"Receive error: {ex.Message}");
+                Log.Warn(LogCategory.Serial, $"Receive error: {ex.Message}");
                 break;
             }
             catch (Exception ex)
@@ -163,7 +163,7 @@ internal static class Serial
                 // A malformed line (bad int parse, unexpected format, etc.)
                 // must not kill this task. Log and continue; the serial
                 // link itself is still healthy.
-                Console.WriteLine($"Receive handler error (skipping line): {ex.GetType().Name}: {ex.Message}");
+                Log.Error(LogCategory.Serial, $"Receive handler error (skipping line): {ex.GetType().Name}: {ex.Message}");
                 continue;
             }
         }
@@ -188,16 +188,17 @@ internal static class Serial
             // "changed" and pushes it to the router. Without this, the
             // router's belief of our cursor position can lag the real
             // one by an entire session until the next real cursor move.
+            Log.Verbose(LogCategory.System, $"TARGET echo: {activeTarget}");
             if (!wasActive && IsActiveTarget)
             {
                 _lastCursorX = int.MinValue;
                 _lastCursorY = int.MinValue;
                 _lastCursorSentUtc = DateTime.MinValue;
-                Console.WriteLine($"=== ACTIVE TARGET: {activeTarget} ===");
+                Log.Debug(LogCategory.Switch, $"=== ACTIVE TARGET: {activeTarget} ===");
             }
             else if (wasActive && !IsActiveTarget)
             {
-                Console.WriteLine($"=== ACTIVE TARGET: {activeTarget} ===");
+                Log.Debug(LogCategory.Switch, $"=== ACTIVE TARGET: {activeTarget} ===");
             }
 
             return;
@@ -234,7 +235,11 @@ internal static class Serial
         if (line.StartsWith("MOUSE ", StringComparison.Ordinal)
             || line.StartsWith("KEY ", StringComparison.Ordinal))
         {
-            Console.WriteLine($"unexpected input message reached agent: {line}");
+            Log.Warn(LogCategory.System, $"unexpected input message reached agent: {line}");
+        }
+        else
+        {
+            Log.Warn(LogCategory.Serial, $"unknown inbound line: {line}");
         }
     }
 
@@ -256,7 +261,7 @@ internal static class Serial
             {
                 if (!int.TryParse(part["X=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedX))
                 {
-                    Console.WriteLine($"CURSOR SET parse error: {line}");
+                    Log.Warn(LogCategory.Mouse, $"CURSOR SET parse error: {line}");
                     return;
                 }
                 x = parsedX;
@@ -265,7 +270,7 @@ internal static class Serial
             {
                 if (!int.TryParse(part["Y=".Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedY))
                 {
-                    Console.WriteLine($"CURSOR SET parse error: {line}");
+                    Log.Warn(LogCategory.Mouse, $"CURSOR SET parse error: {line}");
                     return;
                 }
                 y = parsedY;
@@ -278,6 +283,7 @@ internal static class Serial
         }
 
         Win32.SetCursorPos(x.Value, y.Value);
+        Log.Verbose(LogCategory.Mouse, $"cursor set: {x.Value}, {y.Value}");
     }
 
     // ---- Outbound: display + cursor sync ------------------------------
@@ -300,6 +306,7 @@ internal static class Serial
         }
 
         port.WriteLine(displayMessage);
+        Log.Debug(LogCategory.System, $"display sent: {displayMessage}");
 
         _lastDisplayMessage = displayMessage;
         _displaySentForCurrentConnection = true;
@@ -332,6 +339,7 @@ internal static class Serial
         }
 
         port.WriteLine($"CURSOR {deviceId} X={point.X} Y={point.Y}");
+        Log.Verbose(LogCategory.Mouse, $"cursor sent: {point.X}, {point.Y}");
         _lastCursorX = point.X;
         _lastCursorY = point.Y;
         _lastCursorSentUtc = DateTime.UtcNow;
