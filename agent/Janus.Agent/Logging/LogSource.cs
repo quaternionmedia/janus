@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Janus.Agent.Logging;
 
 /// <summary>
@@ -5,7 +7,7 @@ namespace Janus.Agent.Logging;
 /// </summary>
 internal enum LogSource
 {
-    Agent,
-    Controller,
-    Bridge,
+    [Display(Name="Agt")] Agent,
+    [Display(Name="Crt")] Controller,
+    [Display(Name="Brg")] Bridge,
 }

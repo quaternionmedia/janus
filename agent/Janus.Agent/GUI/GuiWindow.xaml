@@ -487,9 +487,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Text}"
-                                           Foreground="{Binding Foreground}"
-                                           Style="{StaticResource LogRowText}"/>
+                                <TextBlock Style="{StaticResource LogRowText}"><Run Text="{Binding Prefix, Mode=OneWay}" Foreground="{StaticResource MutedBrush}"/><Run Text="{Binding Message, Mode=OneWay}" Foreground="{Binding Foreground}"/></TextBlock>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

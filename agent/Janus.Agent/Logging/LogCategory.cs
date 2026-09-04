@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Janus.Agent.Logging;
 
 // What subsystem a log line came from. Producers pick one at emission
@@ -21,11 +23,11 @@ internal enum LogCategory
     Switch,
 
     // Clipboard sync: local changes, pushes, sends, receives, size caps.
-    Clipboard,
+    [Display(Name="ClipBd")] Clipboard,
 
     // Keyboard events not otherwise covered (future: forwarded keystrokes
     // if agent ever gains that role again, key-based diagnostics).
-    Keyboard,
+    [Display(Name="KeyBd")] Keyboard,
 
     // Mouse events (cursor sends, future button remapping, wheel edge
     // switching diagnostics).

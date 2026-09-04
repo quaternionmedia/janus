@@ -124,8 +124,7 @@ internal static class Program
 
             loggerConfig = loggerConfig.WriteTo.Console(
                 theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Code,
-                outputTemplate:
-                    "{Timestamp:HH:mm:ss} | {Level:u4} | {Category,-9} : {Message:lj}{NewLine}{Exception}");
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u5} [{Category:1}] {Message:lj} {NewLine}{Exception}");
         }
 
         Serilog.Log.Logger = loggerConfig.CreateLogger();
@@ -134,7 +133,10 @@ internal static class Program
         {
             Console.SetOut(new SerilogConsoleTee());
         }
-        Log.System.Info("Running in {Mode}.", isDevelopment ? "Development" : "Production");
+        else
+        {
+            Log.System.Info("Running in DEVELOPMENT mode.\n");
+        }
 
         // Signal dark-mode capability to Windows. After this call, the
         // OS will render native popup menus (used by our tray icon via
@@ -249,7 +251,7 @@ internal static class Program
                     continue;
                 }
 
-                Log.Serial.Info("\nSerial connected: {PortName}", portName);
+                Log.Serial.Info("Serial connected: {PortName}", portName);
                 Serial.BeginSession(port, deviceId);
 
                 // Seed the sync hash with the current clipboard so whatever

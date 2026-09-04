@@ -1,4 +1,3 @@
-using Janus.Agent.Logging;
 using System.Globalization;
 // Disambiguate the WinForms/WPF type collisions that ImplicitUsings
 // pulls in by default. With UseWindowsForms=true and UseWPF=true both
@@ -37,27 +36,20 @@ internal sealed record LogLine(
     LogSource Source,
     string Message)
 {
-    /// <summary>Backward-compat property: today's XAML ItemTemplate
-    /// binds to Text. Just the message; timestamp/level/category will
-    /// join it in the tabular layout in commit 2.</summary>
-    public string Text => Message;
-
-    /// <summary>Backward-compat property: today's XAML ItemTemplate
-    /// binds Foreground to this. Color derives from Level only --
-    /// old text-inference (Categorize) is dead.</summary>
+    /// <summary> XAML ItemTemplate binds Foreground to this. </summary>
     public Brush Foreground => LogLineColors.ForLevel(Level);
 
-    /// <summary>Plain-text render for stdout mirroring by Log.X.
-    /// Fixed-width columns padded so a real console displays them
-    /// aligned. Format matches the mockup: TIME | LEVEL | CATEGORY |
-    /// SOURCE : Message.</summary>
-    public string ToConsoleLine()
+    public string Prefix
     {
-        string ts = Timestamp.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
-        string lvl = Level.ToString().ToLowerInvariant().PadRight(7);
-        string cat = Category.ToString().ToLowerInvariant().PadRight(9);
-        string src = Source.ToString().ToLowerInvariant().PadRight(10);
-        return $"{ts} | {lvl} | {cat} | {src} : {Message}";
+        get
+        {
+            string ts  = Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            string lvl = Level.ToDisplay().PadRight(5);
+            string src = Source.ToDisplay().PadRight(3);
+            string cat = Category.ToDisplay().PadRight(6);
+            string bracketed = $"[{src}.{cat}]";
+            return $"{ts} {lvl} {bracketed} ";
+        }
     }
 }
 
