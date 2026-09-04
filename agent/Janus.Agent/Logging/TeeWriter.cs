@@ -5,19 +5,22 @@ namespace Janus.Agent.Logging;
 
 // TextWriter that forwards every Write/WriteLine to both:
 //   * the original Console.Out (so the hidden console still receives
-//     all output -- it's the source of truth for Console.WriteLine
-//     semantics, and "Show console" debug hatches can surface it)
-//   * the LogSink, line-buffered (so we hand the GUI complete lines,
-//     not partial fragments)
+//     all output -- source of truth for Console.WriteLine semantics,
+//     and "Show console" debug hatches can surface it)
+//   * the LogSink, line-buffered, as the fallback path for raw
+//     Console.WriteLine calls (unmigrated producers, third-party code,
+//     exception messages). Lines routed through LogSink.WriteLine(string)
+//     get Level inferred from text and Category defaulted to System.
 //
 // Program.cs installs an instance via Console.SetOut very early, so
 // every existing Console.WriteLine in the agent flows through here
-// transparently -- no other module needs to know about it.
+// transparently. The instance also publishes its primary writer as a
+// static property (InstalledPrimary) so Log.X can mirror structured
+// lines to stdout without triggering a duplicate LogSink entry.
 //
-// Thread safety: Write(char) and Write(string) can interleave with
-// each other across threads (Console doesn't synchronize beyond
-// per-call basis), so the in-flight line buffer is mutex-guarded.
-// Each completed line is pushed to LogSink atomically.
+// Thread safety: Write(char)/Write(string) can interleave across
+// threads; the in-flight line buffer is mutex-guarded and each completed
+// line is pushed atomically.
 
 internal sealed class TeeWriter : TextWriter
 {
@@ -25,9 +28,16 @@ internal sealed class TeeWriter : TextWriter
     private readonly StringBuilder _lineBuffer = new();
     private readonly object _bufferLock = new();
 
+    // The primary writer of the most recently constructed TeeWriter.
+    // Log.X reads this to mirror structured lines to stdout. Null when
+    // no TeeWriter has been installed (test host, other embedding).
+    private static TextWriter? _installedPrimary;
+    public static TextWriter? InstalledPrimary => _installedPrimary;
+
     public TeeWriter(TextWriter primary)
     {
         _primary = primary ?? throw new ArgumentNullException(nameof(primary));
+        _installedPrimary = _primary;
     }
 
     public override Encoding Encoding => _primary.Encoding;
