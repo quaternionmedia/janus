@@ -30,11 +30,11 @@ internal static class ClipboardSync
         SerialPort? port = Serial.ActivePort;
         if (port is null || !port.IsOpen)
         {
-            Console.WriteLine($"clipboard push ({source}) ignored: no serial connection.");
+            Log.Clipboard.Warn("clipboard push ({Source}) ignored: no serial connection.", source);
             return;
         }
 
-        Console.WriteLine($"clipboard push ({source}): sending clipboard to peer.");
+        Log.Clipboard.Info("clipboard push ({Source}): sending clipboard to peer.", source);
         HandleRequest(port);
     }
 
@@ -55,8 +55,9 @@ internal static class ClipboardSync
 
         if (rawBytes.Length > Config.ClipboardMaxBytes)
         {
-            Console.WriteLine(
-                $"clipboard refused (outbound): {rawBytes.Length} bytes exceeds {Config.ClipboardMaxBytes} limit");
+            Log.Clipboard.Warn(
+                "clipboard refused (outbound): {Bytes} bytes exceeds {Limit} limit", 
+                rawBytes.Length, Config.ClipboardMaxBytes);
             // Tell the other side to clear its clipboard so a stale value
             // doesn't silently paste.
             try
@@ -65,7 +66,7 @@ internal static class ClipboardSync
             }
             catch (Exception ex) when (Serial.IsSerialException(ex))
             {
-                Console.WriteLine($"clipboard clear send error: {ex.Message}");
+                Log.Clipboard.Error(ex, "clipboard clear send error.");
             }
             return;
         }
@@ -78,12 +79,12 @@ internal static class ClipboardSync
         }
         catch (Exception ex) when (Serial.IsSerialException(ex))
         {
-            Console.WriteLine($"clipboard send error: {ex.Message}");
+            Log.Clipboard.Error(ex, "clipboard send error.");
             return;
         }
 
         ClipboardText.UpdateSyncedHash(rawBytes);
-        Console.WriteLine($"clipboard sent ({rawBytes.Length} bytes)");
+        Log.Clipboard.Info("clipboard sent ({Bytes} bytes)", rawBytes.Length);
     }
 
     public static void HandleSet(string line)
@@ -100,6 +101,7 @@ internal static class ClipboardSync
         int idx = line.IndexOf(marker, StringComparison.Ordinal);
         if (idx < 0)
         {
+            Log.Clipboard.Warn("malformed CLIPBOARD SET: missing TEXT= marker");
             return;
         }
 
@@ -112,7 +114,7 @@ internal static class ClipboardSync
         }
         catch (FormatException ex)
         {
-            Console.WriteLine($"Clipboard decode error: {ex.Message}");
+            Log.Clipboard.Error(ex, "Clipboard decode error.");
             return;
         }
 
@@ -121,8 +123,9 @@ internal static class ClipboardSync
             // The other side violated the size contract (or the message
             // got corrupted). Clear local clipboard so nothing stale
             // lingers.
-            Console.WriteLine(
-                $"clipboard oversized inbound: {rawBytes.Length} bytes, clearing destination");
+            Log.Clipboard.Warn(
+                "clipboard oversized inbound: {Bytes} bytes, clearing destination", 
+                rawBytes.Length);
             ClipboardText.SetText(string.Empty);
             ClipboardText.UpdateSyncedHash(Array.Empty<byte>());
             return;
@@ -136,19 +139,19 @@ internal static class ClipboardSync
             // suppressed as a sync echo.
             ClipboardText.UpdateSyncedHash(rawBytes);
             ClipboardText.SetText(text);
-            Console.WriteLine($"clipboard received ({rawBytes.Length} bytes)");
+            Log.Clipboard.Info("clipboard received ({Bytes} bytes)", rawBytes.Length);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Clipboard set error: {ex.Message}");
+            Log.Clipboard.Error(ex, "Clipboard set error.");
         }
     }
 
     public static void HandleClear()
     {
-        Console.WriteLine("clipboard clear received");
+        Log.Clipboard.Info("clipboard clear received");
         ClipboardText.SetText(string.Empty);
-        ClipboardText.UpdateSyncedHash(Array.Empty<byte>());
+        ClipboardText.UpdateSyncedHash([]);
     }
 
     // ---- Outbound: monitor callback ----------------------------------
@@ -186,7 +189,7 @@ internal static class ClipboardSync
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Clipboard monitor read error: {ex.Message}");
+            Log.Clipboard.Error(ex, "Clipboard monitor read error.");
             return;
         }
 
@@ -204,24 +207,26 @@ internal static class ClipboardSync
         // ---- MANUAL OUTBOUND MODE ------------------------------------
         //
         // Never auto-broadcast. Every local clipboard change is
-        // announced to the console with a hint telling the user how to
+        // logged with a hint telling the user how to
         // push it manually. The hash is updated so we don't re-announce
         // the same content if the monitor fires again.
         //
         // Future extension point: this is where a tray notification or
         // popup with a "send to peer" button would hook in. Today it's
-        // just a console message.
+        // just a log message.
         if (Config.ClipboardOutboundMode == ClipboardOutboundMode.Manual)
         {
             if (rawBytes.Length > Config.ClipboardMaxBytes)
             {
-                Console.WriteLine(
-                    $"clipboard change ({rawBytes.Length} bytes) exceeds {Config.ClipboardMaxBytes} hard limit; cannot be sent.");
+                Log.Clipboard.Warn(
+                    "clipboard change ({Bytes} bytes) exceeds {Limit} hard limit; cannot be sent.", 
+                    rawBytes.Length, Config.ClipboardMaxBytes);
             }
             else
             {
-                Console.WriteLine(
-                    $"clipboard change ({rawBytes.Length} bytes); press 'c' in controller to send to peer.");
+                Log.Clipboard.Info(
+                    "clipboard change ({Bytes} bytes); press 'c' in controller to send to peer.", 
+                    rawBytes.Length);
             }
             ClipboardText.UpdateSyncedHash(rawBytes);
             return;
@@ -233,15 +238,16 @@ internal static class ClipboardSync
         {
             // Over hard ceiling: refuse and tell the other side to clear
             // its clipboard so a stale value doesn't paste silently.
-            Console.WriteLine(
-                $"clipboard auto-sync refused: {rawBytes.Length} bytes exceeds {Config.ClipboardMaxBytes} hard limit");
+            Log.Clipboard.Warn(
+                "clipboard auto-sync refused: {Bytes} bytes exceeds {Limit} hard limit", 
+                rawBytes.Length, Config.ClipboardMaxBytes);
             try
             {
                 port.WriteLine("CLIPBOARD CLEAR");
             }
             catch (Exception ex) when (Serial.IsSerialException(ex))
             {
-                Console.WriteLine($"clipboard clear send error: {ex.Message}");
+                Log.Clipboard.Error(ex, "clipboard clear send error.");
             }
             // Record the oversized hash so we don't re-attempt every tick.
             ClipboardText.UpdateSyncedHash(rawBytes);
@@ -255,9 +261,9 @@ internal static class ClipboardSync
             // on the other side. Leave the other side's existing
             // clipboard alone (they can still paste whatever was there
             // before).
-            Console.WriteLine(
-                $"clipboard change {rawBytes.Length} bytes exceeds auto-sync threshold "
-                + $"({Config.ClipboardAutoSyncBytes}); use manual 'c' to propagate.");
+            Log.Clipboard.Info(
+                "clipboard change {Bytes} bytes exceeds auto-sync threshold ({Threshold}); use manual 'c' to propagate.", 
+                rawBytes.Length, Config.ClipboardAutoSyncBytes);
             ClipboardText.UpdateSyncedHash(rawBytes);
             return;
         }
@@ -268,11 +274,11 @@ internal static class ClipboardSync
         {
             port.WriteLine($"CLIPBOARD DATA TEXT={encoded}");
             ClipboardText.UpdateSyncedHash(rawBytes);
-            Console.WriteLine($"clipboard auto-sync sent ({rawBytes.Length} bytes)");
+            Log.Clipboard.Info("clipboard auto-sync sent ({Bytes} bytes)", rawBytes.Length);
         }
         catch (Exception ex) when (Serial.IsSerialException(ex))
         {
-            Console.WriteLine($"clipboard auto-sync send error: {ex.Message}");
+            Log.Clipboard.Error(ex, "clipboard auto-sync send error.");
         }
     }
 }

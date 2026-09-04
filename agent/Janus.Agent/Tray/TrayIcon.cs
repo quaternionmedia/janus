@@ -95,10 +95,11 @@ internal static class TrayIcon
                 };
                 _icon.MouseUp += OnIconMouseUp;
                 _icon.DoubleClick += (_, _) => ToggleWindow();
+                Log.System.Verbose("Tray icon added.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Tray icon start error: {ex.Message}");
+                Log.System.Error(ex, "Tray icon start error.");
             }
         });
     }
@@ -255,7 +256,7 @@ internal static class TrayIcon
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Tray menu error: {ex.Message}");
+            Log.System.Error(ex, "Tray menu error.");
         }
     }
 
@@ -276,11 +277,11 @@ internal static class TrayIcon
             {
                 return new Icon(path);
             }
-            Console.WriteLine($"Tray icon not found at {path}; using system default.");
+            Log.System.Warn("Tray icon not found at {Path}; using system default.", path);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Tray icon load error: {ex.Message}; using system default.");
+            Log.System.Warn(ex, "Tray icon load error; using system default.");
         }
         return SystemIcons.Application;
     }

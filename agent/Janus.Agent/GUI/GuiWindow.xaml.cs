@@ -74,12 +74,12 @@ public partial class GuiWindow : Window
             }
             else
             {
-                Console.WriteLine($"Window icon not found at {iconPath}; using default.");
+                Log.System.Warn("Window icon not found at {IconPath}; using default.", iconPath);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Window icon load error: {ex.Message}; using default.");
+            Log.System.Warn(ex, "Window icon load error; using default.");
         }
     }
 
@@ -107,7 +107,7 @@ public partial class GuiWindow : Window
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Dark title bar attribute error: {ex.Message}");
+            Log.System.Warn(ex, "Dark title bar attribute error.");
         }
     }
 
@@ -192,19 +192,19 @@ public partial class GuiWindow : Window
     private void SwitchAction_Click(object sender, RoutedEventArgs e)
     {
         try { Actions.SwitchToPeer("gui"); }
-        catch (Exception ex) { Console.WriteLine($"GUI switch action error: {ex.Message}"); }
+        catch (Exception ex) { Log.System.Error(ex, "GUI switch action error."); }
     }
 
     private void ClipboardAction_Click(object sender, RoutedEventArgs e)
     {
         try { ClipboardSync.Push("gui"); }
-        catch (Exception ex) { Console.WriteLine($"GUI clipboard action error: {ex.Message}"); }
+        catch (Exception ex) { Log.Clipboard.Error(ex, "GUI clipboard action error."); }
     }
 
     private void ReconnectAction_Click(object sender, RoutedEventArgs e)
     {
         try { Serial.RequestReconnect(); }
-        catch (Exception ex) { Console.WriteLine($"GUI reconnect action error: {ex.Message}"); }
+        catch (Exception ex) { Log.Serial.Error(ex, "GUI reconnect action error."); }
     }
 
     // ---- Settings modal --------------------------------------------

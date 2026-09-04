@@ -1,3 +1,5 @@
+using Janus.Agent.Logging;
+using System.Globalization;
 // Disambiguate the WinForms/WPF type collisions that ImplicitUsings
 // pulls in by default. With UseWindowsForms=true and UseWPF=true both
 // enabled, "Brush", "Color", and "SolidColorBrush" are ambiguous
@@ -9,97 +11,86 @@ using SolidColorBrush = System.Windows.Media.SolidColorBrush;
 
 namespace Janus.Agent.Gui;
 
-// LogLine: the model bound to each row of the log ListBox in the GUI.
-// Holds the raw text plus a pre-resolved Brush so the XAML binds
-// directly without needing a value converter.
+// LogLine: the structured model bound to each row of the log view.
+// Producers build these via Log.X (Log.Info, Log.Warn, etc.) or, as a
+// legacy fallback path, via LogSink.WriteLine(string) when raw
+// Console.WriteLine calls reach TeeWriter.
 //
-// LogLineColors: the shared palette + a heuristic that picks a brush
-// based on line content. Frozen brushes so they're safe to share
-// across the WPF dispatcher thread and any background thread that
-// might construct LogLines (the LogSink event fires on whichever
-// thread called Console.WriteLine).
+// Fields:
+//   Timestamp -- captured at emission via DateTime.Now
+//   Level     -- severity, drives color and (Phase 3) filter-by-level
+//   Category  -- subsystem, drives the main-view default filter
+//   Source    -- which process the line came from (Agent, Controller,
+//                Bridge). Only Agent is populated in Phase 1.
+//   Message   -- the actual text
+//
+// Backward-compat computed properties (Text, Foreground) exist so the
+// current GuiWindow.xaml bindings still work in commit 1. Commit 2
+// rewrites the ItemTemplate to bind to Timestamp/Level/Category/
+// Source/Message directly and colors the message segment via a
+// converter -- at which point these two computed properties can go.
 
-internal sealed class LogLine
+internal sealed record LogLine(
+    DateTime Timestamp,
+    LogLevel Level,
+    LogCategory Category,
+    LogSource Source,
+    string Message)
 {
-    public string Text { get; }
-    public Brush Foreground { get; }
+    /// <summary>Backward-compat property: today's XAML ItemTemplate
+    /// binds to Text. Just the message; timestamp/level/category will
+    /// join it in the tabular layout in commit 2.</summary>
+    public string Text => Message;
 
-    public LogLine(string text, Brush foreground)
+    /// <summary>Backward-compat property: today's XAML ItemTemplate
+    /// binds Foreground to this. Color derives from Level only --
+    /// old text-inference (Categorize) is dead.</summary>
+    public Brush Foreground => LogLineColors.ForLevel(Level);
+
+    /// <summary>Plain-text render for stdout mirroring by Log.X.
+    /// Fixed-width columns padded so a real console displays them
+    /// aligned. Format matches the mockup: TIME | LEVEL | CATEGORY |
+    /// SOURCE : Message.</summary>
+    public string ToConsoleLine()
     {
-        Text = text;
-        Foreground = foreground;
+        string ts = Timestamp.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+        string lvl = Level.ToString().ToLowerInvariant().PadRight(7);
+        string cat = Category.ToString().ToLowerInvariant().PadRight(9);
+        string src = Source.ToString().ToLowerInvariant().PadRight(10);
+        return $"{ts} | {lvl} | {cat} | {src} : {Message}";
     }
 }
 
+// Palette + Level -> Brush mapping. The old message-text-inference
+// Categorize() is gone -- producers tag Level explicitly via Log.X, and
+// the fallback path (LogSink.WriteLine(string)) infers Level from
+// message text just enough to keep error lines red until every producer
+// is migrated.
+
 internal static class LogLineColors
 {
-    // VS Code / Docker Desktop dark theme palette. Greyscale info as
-    // default, blue for connection events, yellow for switch / target
-    // changes, green for successful sync events, red for errors.
+    // VS Code / Docker Desktop dark theme palette. Frozen brushes so
+    // they're safe to share across threads.
+    public static readonly Brush Info    = Make(0xCC, 0xCC, 0xCC);
+    public static readonly Brush Verbose = Make(0x85, 0x85, 0x85);
+    public static readonly Brush Warn    = Make(0xDC, 0xDC, 0xAA);
+    public static readonly Brush Error   = Make(0xF4, 0x87, 0x71);
+    public static readonly Brush Success = Make(0x73, 0xC9, 0x91);
+    public static readonly Brush Muted   = Verbose;
 
-    public static readonly Brush Info       = Make(0xCC, 0xCC, 0xCC);
-    public static readonly Brush Muted      = Make(0x85, 0x85, 0x85);
-    public static readonly Brush Connection = Make(0x75, 0xBE, 0xFF);
-    public static readonly Brush Switch     = Make(0xDC, 0xDC, 0xAA);
-    public static readonly Brush Success    = Make(0x73, 0xC9, 0x91);
-    public static readonly Brush Error      = Make(0xF4, 0x87, 0x71);
+    public static Brush ForLevel(LogLevel level) => level switch
+    {
+        LogLevel.Error   => Error,
+        LogLevel.Warn    => Warn,
+        LogLevel.Debug   => Warn,
+        LogLevel.Verbose => Verbose,
+        _                => Info,
+    };
 
-    private static Brush Make(byte r, byte g, byte b)
+    private static SolidColorBrush Make(byte r, byte g, byte b)
     {
         var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
         brush.Freeze();
         return brush;
-    }
-
-    /// <summary>Pick a foreground brush based on the line's content.
-    /// First match wins; checks are ordered from highest-priority
-    /// (error) to lowest (info default). Lightweight pattern matching
-    /// on string content -- the agent doesn't have structured log
-    /// levels and adding them isn't worth the churn just for this UI.
-    /// </summary>
-    public static Brush Categorize(string line)
-    {
-        if (string.IsNullOrEmpty(line))
-        {
-            return Muted;
-        }
-
-        // Errors / failures first. Catches a wide net intentionally:
-        // anything that contains "error" or "failed" is probably
-        // something the user should see in red.
-        if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
-        {
-            return Error;
-        }
-
-        // Active-target / switch changes. The "=== ACTIVE TARGET" line
-        // is emitted by Serial; "switch (...)" lines are emitted by
-        // Actions.SwitchToPeer.
-        if (line.StartsWith("=== ACTIVE", StringComparison.Ordinal)
-            || line.StartsWith("switch (", StringComparison.Ordinal))
-        {
-            return Switch;
-        }
-
-        // Connection events: serial port open/close, agent start/stop.
-        if (line.StartsWith("Serial connected", StringComparison.Ordinal)
-            || line.StartsWith("Serial disconnected", StringComparison.Ordinal)
-            || line.StartsWith("Stopping agent", StringComparison.Ordinal)
-            || line.StartsWith("Janus.Agent ", StringComparison.Ordinal))
-        {
-            return Connection;
-        }
-
-        // Successful clipboard / sync events.
-        if (line.Contains(" sent (", StringComparison.Ordinal)
-            || line.Contains(" received (", StringComparison.Ordinal)
-            || line.Contains(" auto-sync sent", StringComparison.Ordinal))
-        {
-            return Success;
-        }
-
-        return Info;
     }
 }

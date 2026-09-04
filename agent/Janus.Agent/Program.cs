@@ -1,11 +1,15 @@
 ﻿using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
 using Janus.Agent.Gui;
-using Janus.Agent.Logging;
 using Janus.Agent.Platform;
 using Janus.Agent.Settings;
 using Janus.Agent.Tray;
+using Microsoft.Extensions.Configuration;
+using Serilog;
+using Serilog.Formatting.Compact;
+using System.IO;
 using System.IO.Ports;
+using Log = Janus.Agent.Logging.Log;
 
 namespace Janus.Agent;
 
@@ -26,8 +30,9 @@ namespace Janus.Agent;
 //   TrayIcon        -- NotifyIcon + Win32 popup menu, primary
 //                      user-facing UI
 //   GuiHost         -- dispatcher thread + WPF logs/status window
-//   LogSink         -- in-process ring buffer of Console.WriteLine output
-//   TeeWriter       -- forwards Console.Out to the real console AND the sink
+//   LogSink         -- in-process ring buffer feeding the GUI
+//   GuiSink         -- Serilog sink that pushes LogEvents into LogSink
+//   Log             -- structured logging facade over Serilog
 //   Config          -- appsettings.json -> static properties
 //   Win32           -- P/Invoke surface
 //
@@ -50,6 +55,9 @@ internal static class Program
         string deviceId = args.Length > 0 ? args[0].ToUpperInvariant() : "P";
         string portName = args.Length > 1 ? args[1] : string.Empty;
 
+        // Argument validation runs BEFORE Serilog is configured (which
+        // needs appsettings.json to have loaded). These errors go to
+        // raw stdout only -- fine, because the process exits immediately.
         if (deviceId != "P" && deviceId != "W")
         {
             Console.WriteLine("Invalid device id. Use 'P' or 'W'.");
@@ -62,12 +70,71 @@ internal static class Program
             return;
         }
 
-        // Install the TeeWriter as the FIRST thing we do after argument
-        // validation. Every Console.WriteLine from now on flows to both
-        // the (silent in WinExe) real console buffer and the LogSink
-        // that the GUI tails. Done before any other module starts so
-        // we don't miss startup log lines.
-        Console.SetOut(new TeeWriter(Console.Out));
+        // ---- Serilog + logging pipeline ----------------------------------
+        //
+        // Order matters here:
+        //   1. Build IConfiguration from appsettings.json.
+        //   2. Build the Serilog logger and assign it to Serilog.Log.Logger
+        //      BEFORE anything constructs a CategoryLogger (which reads
+        //      Serilog.Log to build its ForContext scope).
+        //   3. In Production only, install SerilogConsoleTee on Console.Out
+        //      so stray writelines still land in the log store. In
+        //      Development, skip the tee -- Serilog's own Console sink
+        //      writes to stdout, and routing that back through the tee
+        //      would recurse.
+
+        IConfigurationRoot appConfig = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+
+        string envName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production";
+        bool isDevelopment = envName.Equals("Development", StringComparison.OrdinalIgnoreCase);
+        
+        // Log path: user-configurable via Logging:OutputPath in appsettings.
+        // Blank / missing = default under %LOCALAPPDATA%\Janus\logs. Custom
+        // paths are run through ExpandEnvironmentVariables so users can write
+        // "%USERPROFILE%\Documents\Janus" etc. Serilog's File sink itself
+        // doesn't expand env vars, which is why we handle it here.
+        string? configuredLogDir = appConfig["Janus:LogOutputPath"];
+        string logDir = string.IsNullOrWhiteSpace(configuredLogDir)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Janus", "logs")
+            : Environment.ExpandEnvironmentVariables(configuredLogDir);
+        Directory.CreateDirectory(logDir);
+        string logPath = Path.Combine(logDir, "agent-.jsonl");
+
+        LoggerConfiguration loggerConfig = new LoggerConfiguration()
+            .ReadFrom.Configuration(appConfig)
+            .WriteTo.File(
+                formatter: new CompactJsonFormatter(),
+                path: logPath,
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 30,
+                shared: true)
+            .WriteTo.Sink(new GuiSink());
+
+        if (isDevelopment)
+        {
+            // WinExe processes don't inherit the parent terminal's console
+            // by default. Attach it explicitly so the Console sink's writes
+            // land somewhere visible during `dotnet run`.
+            Win32.AttachConsole(Win32.ATTACH_PARENT_PROCESS);
+
+            loggerConfig = loggerConfig.WriteTo.Console(
+                theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Code,
+                outputTemplate:
+                    "{Timestamp:HH:mm:ss} | {Level:u4} | {Category,-9} : {Message:lj}{NewLine}{Exception}");
+        }
+
+        Serilog.Log.Logger = loggerConfig.CreateLogger();
+
+        if (!isDevelopment)
+        {
+            Console.SetOut(new SerilogConsoleTee());
+        }
+        Log.System.Info("Running in {Mode}.", isDevelopment ? "Development" : "Production");
 
         // Signal dark-mode capability to Windows. After this call, the
         // OS will render native popup menus (used by our tray icon via
@@ -84,7 +151,7 @@ internal static class Program
             // uxtheme.dll missing on a non-desktop SKU, or the ordinal
             // changed in some future Windows update. Not fatal; menus
             // will just stay light.
-            Console.WriteLine($"SetPreferredAppMode failed: {ex.Message}");
+            Log.System.Warn(ex, "SetPreferredAppMode failed.");
         }
 
         // Tool-window style + hide on the console window. Both are
@@ -104,14 +171,15 @@ internal static class Program
             cts.Cancel();
         };
 
-        Console.WriteLine($"Janus.Agent [{deviceId}] started. Press Ctrl+C to stop.");
-        Console.WriteLine($"serial port: {portName}");
-        Console.WriteLine($"clipboard outbound mode: {Config.ClipboardOutboundMode}");
-        Console.WriteLine($"clipboard push: console key '{Config.ClipboardPushConsoleKey}'"
-            + (Config.ClipboardPushHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
-        Console.WriteLine($"switch devices: console key '{Config.SwitchConsoleKey}'"
-            + (Config.SwitchHotkeyEnabled ? ", global hotkey enabled" : ", global hotkey disabled"));
-        Console.WriteLine();
+        Log.System.Info("Janus.Agent [{DeviceId}] started. Press Ctrl+C to stop.", deviceId);
+        Log.System.Info("serial port: {PortName}", portName);
+        Log.System.Info("clipboard outbound mode: {OutboundMode}", Config.ClipboardOutboundMode);
+        Log.System.Info("clipboard push: console key '{ConsoleKey}', global hotkey {HotkeyState}",
+            Config.ClipboardPushConsoleKey,
+            Config.ClipboardPushHotkeyEnabled ? "enabled" : "disabled");
+        Log.System.Info("switch devices: console key '{ConsoleKey}', global hotkey {HotkeyState}\n",
+            Config.SwitchConsoleKey,
+            Config.SwitchHotkeyEnabled ? "enabled" : "disabled");
 
         // ---- Composition -------------------------------------------------
 
@@ -142,13 +210,13 @@ internal static class Program
         if (Config.SwitchOnLock)
         {
             MessageWindow.RegisterLockListener(() => Actions.SwitchToPeer("lock"));
-            Console.WriteLine("switch on workstation lock: enabled");
+            Log.System.Info("switch on workstation lock: enabled");
         }
 
         if (Config.SwitchOnShutdown)
         {
             MessageWindow.RegisterPowerEventListener(() => Actions.SwitchToPeer("shutdown"));
-            Console.WriteLine("switch on shutdown/suspend: enabled");
+            Log.System.Info("switch on shutdown/suspend: enabled");
         }
 
         Actions.StartConsoleKeyReader(cts.Token);
@@ -181,8 +249,7 @@ internal static class Program
                     continue;
                 }
 
-                Console.WriteLine();
-                Console.WriteLine($"Serial connected: {portName}");
+                Log.Serial.Info("\nSerial connected: {PortName}", portName);
                 Serial.BeginSession(port, deviceId);
 
                 // Seed the sync hash with the current clipboard so whatever
@@ -211,7 +278,7 @@ internal static class Program
                 }
                 catch (Exception ex) when (Serial.IsSerialException(ex))
                 {
-                    Console.WriteLine($"Serial session error: {ex.Message}");
+                    Log.Serial.Error(ex, "Serial session error.");
                 }
                 finally
                 {
@@ -225,7 +292,7 @@ internal static class Program
 
                 if (!cts.Token.IsCancellationRequested)
                 {
-                    Console.WriteLine($"Serial disconnected. Retrying: {portName}");
+                    Log.Serial.Warn("Serial disconnected. Retrying: {PortName}", portName);
                     await Task.Delay(Config.TimingReconnectDelayMs, cts.Token);
                 }
             }
@@ -235,7 +302,7 @@ internal static class Program
         }
         finally
         {
-            Console.WriteLine("Stopping agent.");
+            Log.System.Info("Stopping agent.");
             // Tear down UI in reverse-startup order:
             //  1. GuiHost  -- close the WPF window, shut its dispatcher.
             //  2. TrayIcon -- remove the tray icon and destroy the
@@ -246,6 +313,9 @@ internal static class Program
             GuiHost.Stop();
             TrayIcon.Stop();
             MessageWindow.Stop();
+
+            // Flush any buffered log entries and release file handles.
+            Serilog.Log.CloseAndFlush();
         }
     }
 }

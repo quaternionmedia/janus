@@ -72,6 +72,9 @@ internal static class Win32
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int TrackPopupMenuEx(IntPtr hMenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
+    
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool AttachConsole(int processId);
 
     // Menu item flags
     internal const uint MF_STRING     = 0x00000000;
@@ -83,6 +86,8 @@ internal static class Win32
     // TrackPopupMenuEx flags
     internal const uint TPM_RIGHTBUTTON = 0x0002;
     internal const uint TPM_RETURNCMD   = 0x0100;
+
+    public const int ATTACH_PARENT_PROCESS = -1;
 
     // ---- DWM dark mode (dwmapi) -------------------------------------------
     //

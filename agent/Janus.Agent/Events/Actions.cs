@@ -21,18 +21,18 @@ internal static class Actions
         SerialPort? port = Serial.ActivePort;
         if (port is null || !port.IsOpen)
         {
-            Console.WriteLine($"switch ({source}) ignored: no serial connection.");
+            Log.Switch.Warn("switch ({Source}) ignored: no serial connection.", source);
             return;
         }
 
         try
         {
             port.WriteLine("SWITCH PEER");
-            Console.WriteLine($"switch ({source}): requested switch to peer.");
+            Log.Switch.Info("switch ({Source}): requested switch to peer.", source);
         }
         catch (Exception ex) when (Serial.IsSerialException(ex))
         {
-            Console.WriteLine($"switch send error: {ex.Message}");
+            Log.Switch.Error(ex, "switch send error.");
         }
     }
 
@@ -79,11 +79,12 @@ internal static class Actions
                 {
                     // No interactive console (stdin redirected). Nothing
                     // to read; stop the reader thread.
+                    Log.System.Debug("console key reader: no interactive stdin, stopping.");
                     return;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"console reader error: {ex.Message}");
+                    Log.System.Error(ex, "console reader error.");
                     Thread.Sleep(250);
                 }
             }

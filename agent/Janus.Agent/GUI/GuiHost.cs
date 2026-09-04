@@ -58,7 +58,7 @@ internal static class GuiHost
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"GuiHost thread error: {ex.Message}");
+                Log.System.Error(ex, "GuiHost thread error.");
                 _ready.Set();
             }
         })
@@ -104,7 +104,7 @@ internal static class GuiHost
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"GuiHost show error: {ex.Message}");
+                    Log.System.Error(ex, "GuiHost show error.");
                 }
             }));
         }
@@ -129,7 +129,7 @@ internal static class GuiHost
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"GuiHost hide error: {ex.Message}");
+                    Log.System.Error(ex, "GuiHost hide error.");
                 }
             }));
         }

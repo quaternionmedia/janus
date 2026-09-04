@@ -49,13 +49,13 @@ internal static class ClipboardText
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Clipboard get error: {ex.Message}");
+                    Log.Clipboard.Warn(ex, "Clipboard GET error.");
                 }
             });
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Clipboard get marshal error: {ex.Message}");
+            Log.Clipboard.Warn(ex, "Clipboard GET marshal error.");
         }
         return result;
     }
@@ -122,7 +122,7 @@ internal static class ClipboardText
 
         if (capturedException is not null)
         {
-            Console.WriteLine($"Clipboard get error: {capturedException.Message}");
+            Log.Clipboard.Warn(capturedException, "Clipboard GET error.");
         }
 
         return result;

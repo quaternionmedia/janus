@@ -85,7 +85,7 @@ internal static class Config
 
         if (!File.Exists(configPath))
         {
-            Console.WriteLine($"appsettings.json not found at {configPath}; using defaults.");
+            Log.System.Warn("appsettings.json not found at {ConfigPath}; using defaults.", configPath);
             return;
         }
 
@@ -102,10 +102,11 @@ internal static class Config
 
             if (cfg is null)
             {
-                Console.WriteLine("appsettings.json parsed as empty; using defaults.");
+                Log.System.Warn("appsettings.json parsed as empty; using defaults.");
                 return;
             }
-
+            
+            Log.System.Debug("appsettings.json loaded from {ConfigPath}", configPath);
             ApplySerial(cfg.Serial);
             ApplyClipboard(cfg.Clipboard);
             ApplyTiming(cfg.Timing);
@@ -113,7 +114,7 @@ internal static class Config
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to load appsettings.json: {ex.Message}. Using defaults.");
+            Log.System.Warn(ex, "Failed to load appsettings.json. Using defaults.");
         }
     }
 

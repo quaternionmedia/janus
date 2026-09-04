@@ -18,7 +18,7 @@ namespace Janus.Agent.Gui;
 //   This-PC group:     ThisPc
 //   Active target:     ActiveTarget, ActiveTargetSuffix
 //   Last activity:     LastActivity
-//   Log:               LogLines (ObservableCollection)
+//   Log:               LogLines (ObservableCollection<LogLine>)
 //   Search:            SearchText -- live filter over the log
 //   Settings display:  Cfg* properties (read-only snapshots of Config)
 //
@@ -26,7 +26,11 @@ namespace Janus.Agent.Gui;
 //   * Periodic (500 ms DispatcherTimer) -- refreshes the status group
 //     and IsConnected from Serial's statics.
 //   * Reactive (LogSink.LineAdded) -- appends a new LogLine to the
-//     collection, marshalling onto the dispatcher.
+//     collection, marshalling onto the dispatcher. The LogSink event
+//     now carries a structured LogLine (was a raw string pre-1a); the
+//     categorization-from-message inference has moved to LogSink's
+//     own fallback path and is scheduled for deletion once every
+//     producer uses Log.X.
 //
 // The Cfg* properties are static snapshots: Config is loaded once at
 // startup and doesn't change during runtime, so we don't bother with
@@ -39,7 +43,7 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
 
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _statusTimer;
-    private readonly Action<string> _onLineAdded;
+    private readonly Action<LogLine> _onLineAdded;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -174,10 +178,11 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         view.Filter = LogFilter;
 
         // Seed the log with any history that accumulated before the
-        // GUI started.
-        foreach (string line in LogSink.Snapshot())
+        // GUI started. Snapshot now returns structured LogLine records
+        // directly -- no wrap/categorize step needed.
+        foreach (LogLine line in LogSink.Snapshot())
         {
-            LogLines.Add(new LogLine(line, LogLineColors.Categorize(line)));
+            LogLines.Add(line);
         }
         TrimLogIfNeeded();
 
@@ -205,15 +210,15 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
     {
         if (item is not LogLine line) return false;
         if (string.IsNullOrEmpty(_searchText)) return true;
-        // Case-insensitive substring match. Search is purely on the
-        // line text -- categories / brushes are derived from the same
-        // text, so we don't need a separate field.
-        return line.Text.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
+        // Case-insensitive substring match against the message text.
+        // Timestamp/level/category/source aren't searched -- those are
+        // for the diagnostics view's structured filters (Phase 3).
+        return line.Message.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- Reactive path: new log line ---------------------------------
 
-    private void OnLineAdded(string line)
+    private void OnLineAdded(LogLine line)
     {
         if (_dispatcher.CheckAccess())
         {
@@ -225,9 +230,9 @@ internal sealed class GuiViewModel : INotifyPropertyChanged
         }
     }
 
-    private void AppendLogLine(string line)
+    private void AppendLogLine(LogLine line)
     {
-        LogLines.Add(new LogLine(line, LogLineColors.Categorize(line)));
+        LogLines.Add(line);
         TrimLogIfNeeded();
     }
 
