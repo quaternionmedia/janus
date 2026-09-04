@@ -9,7 +9,8 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         UseLayoutRounding="True"
-        TextOptions.TextFormattingMode="Display">
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="ClearType">
 
     <Window.Resources>
         <ResourceDictionary>
@@ -19,27 +20,25 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <!--
-        Outer Grid wraps the main content + the modal overlay. The modal
-        sits later in the document so it draws on top when visible.
-        Both Main and Diagnostics tabs (stage 2) will open the same
-        modal instance via the ActionsPanel.SettingsRequested bubble.
-    -->
     <Grid>
 
-        <!-- ============== TAB CONTENT (single view for stage 1) =========== -->
+        <!-- ============== TABS =========== -->
         <!--
-            Stage 1: only MainView. Stage 2 wraps this in a TabControl
-            with a DiagnosticsView tab alongside.
+            TabControl uses default caching (tab contents stay
+            instantiated across tab switches), so each view retains
+            its own scroll position, search text, and log state when
+            the user flips back and forth.
         -->
-        <views:MainView x:Name="MainViewInstance"/>
+        <TabControl x:Name="MainTabs">
+            <TabItem Header="Main">
+                <views:MainView x:Name="MainViewInstance"/>
+            </TabItem>
+            <TabItem Header="Diagnostics">
+                <views:DiagnosticsView x:Name="DiagViewInstance"/>
+            </TabItem>
+        </TabControl>
 
         <!-- ============== SETTINGS MODAL OVERLAY =========== -->
-        <!--
-            Initially Collapsed; the window's code-behind toggles it
-            when it catches a bubbled ActionsPanel.SettingsRequested
-            event or an Esc key press.
-        -->
         <Grid x:Name="SettingsModal" Visibility="Collapsed">
             <Rectangle Fill="#99000000" MouseLeftButtonDown="ModalBackdrop_Click"/>
 
@@ -88,9 +87,8 @@
                                   VerticalScrollBarVisibility="Auto"
                                   Padding="20,16,20,18">
                         <StackPanel>
-
-                            <!-- CONNECTION -->
-                            <TextBlock Text="CONNECTION" Style="{StaticResource SettingsSectionHeader}"/>
+                            
+                            <TextBox Text="CONNECTION" Style="{StaticResource SelectableSettingsSectionHeader}"/>
                             <Grid Margin="0,0,0,18">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="180"/>
@@ -103,20 +101,19 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Baud rate" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgBaud}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Read timeout" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgReadTimeout}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Write timeout" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgWriteTimeout}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Read buffer" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgReadBuffer}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Write buffer" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgWriteBuffer}" Style="{StaticResource SettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="0" Text="Baud rate" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="0" Text="{Binding CfgBaud, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="1" Text="Read timeout" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding CfgReadTimeout, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="2" Text="Write timeout" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="2" Text="{Binding CfgWriteTimeout, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="3" Text="Read buffer" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="3" Text="{Binding CfgReadBuffer, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="4" Text="Write buffer" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="4" Text="{Binding CfgWriteBuffer, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
                             </Grid>
 
-                            <!-- SWITCH TRIGGERS -->
-                            <TextBlock Text="SWITCH TRIGGERS" Style="{StaticResource SettingsSectionHeader}"/>
+                            <TextBox Text="SWITCH TRIGGERS" Style="{StaticResource SelectableSettingsSectionHeader}"/>
                             <Grid Margin="0,0,0,18">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="180"/>
@@ -128,18 +125,17 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Column="0" Grid.Row="0" Text="On workstation lock" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgOnLock}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="1" Text="On shutdown / suspend" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgOnShutdown}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Console key" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgSwitchConsole}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Global hotkey" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgSwitchHotkey}" Style="{StaticResource SettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="0" Text="On workstation lock" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="0" Text="{Binding CfgOnLock, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="1" Text="On shutdown / suspend" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding CfgOnShutdown, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="2" Text="Console key" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="2" Text="{Binding CfgSwitchConsole, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="3" Text="Global hotkey" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="3" Text="{Binding CfgSwitchHotkey, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
                             </Grid>
 
-                            <!-- CLIPBOARD -->
-                            <TextBlock Text="CLIPBOARD" Style="{StaticResource SettingsSectionHeader}"/>
+                            <TextBox Text="CLIPBOARD" Style="{StaticResource SelectableSettingsSectionHeader}"/>
                             <Grid Margin="0,0,0,18">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="180"/>
@@ -152,20 +148,19 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Outbound mode" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgOutboundMode}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Auto-sync threshold" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgAutoSyncBytes}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Max size" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgMaxBytes}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Push console key" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgPushConsole}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Push global hotkey" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgPushHotkey}" Style="{StaticResource SettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="0" Text="Outbound mode" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="0" Text="{Binding CfgOutboundMode, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="1" Text="Auto-sync threshold" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding CfgAutoSyncBytes, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="2" Text="Max size" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="2" Text="{Binding CfgMaxBytes, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="3" Text="Push console key" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="3" Text="{Binding CfgPushConsole, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="4" Text="Push global hotkey" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="4" Text="{Binding CfgPushHotkey, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
                             </Grid>
 
-                            <!-- TIMING -->
-                            <TextBlock Text="TIMING" Style="{StaticResource SettingsSectionHeader}"/>
+                            <TextBox Text="TIMING" Style="{StaticResource SelectableSettingsSectionHeader}"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="180"/>
@@ -178,16 +173,16 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Column="0" Grid.Row="0" Text="Main tick" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="0" Text="{Binding CfgMainTick}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="1" Text="Reconnect delay" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="1" Text="{Binding CfgReconnectDelay}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="2" Text="Cursor send interval" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="2" Text="{Binding CfgCursorSendInterval}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="3" Text="Cursor keepalive" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="3" Text="{Binding CfgCursorKeepalive}" Style="{StaticResource SettingsValue}"/>
-                                <TextBlock Grid.Column="0" Grid.Row="4" Text="Display refresh" Style="{StaticResource SettingsLabel}"/>
-                                <TextBlock Grid.Column="1" Grid.Row="4" Text="{Binding CfgDisplayRefresh}" Style="{StaticResource SettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="0" Text="Main tick" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="0" Text="{Binding CfgMainTick, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="1" Text="Reconnect delay" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="1" Text="{Binding CfgReconnectDelay, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="2" Text="Cursor send interval" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="2" Text="{Binding CfgCursorSendInterval, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="3" Text="Cursor keepalive" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="3" Text="{Binding CfgCursorKeepalive, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
+                                <TextBox Grid.Column="0" Grid.Row="4" Text="Display refresh" Style="{StaticResource SelectableSettingsLabel}"/>
+                                <TextBox Grid.Column="1" Grid.Row="4" Text="{Binding CfgDisplayRefresh, Mode=OneWay}" Style="{StaticResource SelectableSettingsValue}"/>
                             </Grid>
 
                         </StackPanel>

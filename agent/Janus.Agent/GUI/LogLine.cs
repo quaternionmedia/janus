@@ -1,12 +1,4 @@
 using System.Globalization;
-// Disambiguate the WinForms/WPF type collisions that ImplicitUsings
-// pulls in by default. With UseWindowsForms=true and UseWPF=true both
-// enabled, "Brush", "Color", and "SolidColorBrush" are ambiguous
-// between System.Drawing and System.Windows.Media. These aliases
-// pin them to the WPF types we want everywhere in this file.
-using Brush = System.Windows.Media.Brush;
-using Color = System.Windows.Media.Color;
-using SolidColorBrush = System.Windows.Media.SolidColorBrush;
 
 namespace Janus.Agent.Gui;
 

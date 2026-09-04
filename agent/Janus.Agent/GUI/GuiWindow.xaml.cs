@@ -1,3 +1,5 @@
+using Janus.Agent.Gui.Shared;
+using Janus.Agent.Gui.ViewModels;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -10,16 +12,14 @@ using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 
 namespace Janus.Agent.Gui;
 
-// Shell for the WPF window. In stage 1 this is deliberately thin --
-// it hosts a single MainView, wires up window-level chrome (dark
-// title bar, icon, close-to-tray), and owns the settings modal that
-// both current and future tabs will open.
+// Shell for the WPF window. Hosts the tabbed content (MainView +
+// DiagnosticsView) plus the shared settings modal.
 //
 // Modal-open is decoupled from ActionsPanel via a bubbling RoutedEvent
 // (ActionsPanel.SettingsRequestedEvent). AddHandler on the window
 // itself catches the event no matter which nested ActionsPanel fired
-// it, which lets stage 2's DiagnosticsView reuse the same plumbing
-// with zero additional wiring.
+// it -- so both Main and Diag tabs open the same modal instance
+// without additional wiring.
 
 public partial class GuiWindow : Window
 {
@@ -43,22 +43,13 @@ public partial class GuiWindow : Window
     {
         InitializeComponent();
 
-        // Window's own DataContext feeds the settings modal (Cfg*
-        // properties). MainView's DataContext is set inside MainView
-        // itself, so those bindings don't inherit from here.
         DataContext = _viewModel;
 
-        // Catch bubbled SettingsRequested events from any nested
-        // ActionsPanel (currently one; stage 2 will have two).
         AddHandler(ActionsPanel.SettingsRequestedEvent,
             new RoutedEventHandler(ActionsPanel_SettingsRequested));
 
-        // Escape closes the modal if it's open. KeyDown at the window
-        // level catches it regardless of focus location.
         KeyDown += GuiWindow_KeyDown;
 
-        // Load the window icon. Missing/corrupt file logs a warning
-        // and falls back to Windows' default.
         try
         {
             string iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "janus_lg.ico");
@@ -89,9 +80,6 @@ public partial class GuiWindow : Window
             if (hwnd == IntPtr.Zero) return;
 
             int useDark = 1;
-
-            // Try the modern attribute first (Windows 10 build 19041+).
-            // Falls back to the pre-19041 attribute if that fails.
             int hr = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
             if (hr != 0)
             {
@@ -117,11 +105,13 @@ public partial class GuiWindow : Window
     }
 
     /// <summary>Called by GuiHost.Stop to actually close the window
-    /// rather than hiding it. OnClosing checks this flag to decide.</summary>
+    /// rather than hiding it. Shuts down each view's ViewModel so
+    /// their status timers and LogSink subscriptions release cleanly.</summary>
     public void ForceClose()
     {
         _forceClosing = true;
-        MainViewInstance.Shutdown();
+        try { MainViewInstance.Shutdown(); } catch { }
+        try { DiagViewInstance.Shutdown(); } catch { }
         Close();
     }
 
@@ -139,9 +129,6 @@ public partial class GuiWindow : Window
 
     private void ModalBackdrop_Click(object sender, MouseButtonEventArgs e)
     {
-        // The backdrop Rectangle covers the whole window area. The
-        // panel Border draws on top of it (later in document order),
-        // so clicks that land on the panel don't reach this handler.
         HideSettingsModal();
     }
 

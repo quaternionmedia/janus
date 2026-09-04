@@ -1,4 +1,4 @@
-<UserControl x:Class="Janus.Agent.Gui.Views.MainView"
+<UserControl x:Class="Janus.Agent.Gui.Views.DiagnosticsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:shared="clr-namespace:Janus.Agent.Gui.Shared">
@@ -29,71 +29,32 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!--
-                    All static labels and bound values are now
-                    SelectableText TextBoxes so text can be highlighted
-                    and copied like anywhere else on Windows. Section
-                    labels use FontSize 10.5 muted + medium weight (was
-                    the SectionLabel TextBlock style); values use the
-                    style defaults (13, TextBrush).
-                -->
                 <StackPanel Grid.Row="0">
-                    <TextBox Text="STATUS"
+                    <TextBox Text="DIAGNOSTICS"
                              Style="{StaticResource SelectableText}"
                              FontSize="10.5"
                              Foreground="{StaticResource MutedBrush}"
                              FontWeight="Medium"
-                             Margin="0,0,0,6"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                        <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding StatusDot}"/>
-                        <TextBox Text="{Binding StatusText, Mode=OneWay}"
-                                 Style="{StaticResource SelectableText}"
-                                 Margin="8,0,0,0"/>
-                    </StackPanel>
-                    <TextBox Text="{Binding PortInfo, Mode=OneWay}"
-                             Style="{StaticResource SelectableText}"
-                             FontSize="11"
-                             Foreground="{StaticResource FaintBrush}"
-                             Margin="16,0,0,18"/>
+                             Margin="0,0,0,10"/>
 
-                    <TextBox Text="THIS PC"
-                             Style="{StaticResource SelectableText}"
-                             FontSize="10.5"
-                             Foreground="{StaticResource MutedBrush}"
-                             FontWeight="Medium"
-                             Margin="0,0,0,6"/>
-                    <TextBox Text="{Binding ThisPc, Mode=OneWay}"
-                             Style="{StaticResource SelectableText}"
-                             Margin="0,0,0,18"/>
-
-                    <TextBox Text="ACTIVE TARGET"
-                             Style="{StaticResource SelectableText}"
-                             FontSize="10.5"
-                             Foreground="{StaticResource MutedBrush}"
-                             FontWeight="Medium"
-                             Margin="0,0,0,6"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
-                        <TextBox Text="{Binding ActiveTarget, Mode=OneWay}"
-                                 Style="{StaticResource SelectableText}"
-                                 Foreground="{StaticResource AccentBlue}"
-                                 FontWeight="Medium"
-                                 FontSize="13"/>
-                        <TextBox Text="{Binding ActiveTargetSuffix, Mode=OneWay}"
-                                 Style="{StaticResource SelectableText}"
-                                 Foreground="{StaticResource MutedBrush}"
-                                 FontSize="11"
-                                 Margin="8,1,0,0"
-                                 VerticalAlignment="Center"/>
-                    </StackPanel>
-
-                    <TextBox Text="LAST ACTIVITY"
-                             Style="{StaticResource SelectableText}"
-                             FontSize="10.5"
-                             Foreground="{StaticResource MutedBrush}"
-                             FontWeight="Medium"
-                             Margin="0,0,0,6"/>
-                    <TextBox Text="{Binding LastActivity, Mode=OneWay}"
-                             Style="{StaticResource SelectableText}"/>
+                    <!--
+                        Sub-nav item stays a RadioButton (interactive
+                        control, not text to copy). GroupName ties
+                        future siblings (Metrics etc.) so only one is
+                        selected at a time.
+                    -->
+                    <RadioButton Style="{StaticResource SubNavItem}"
+                                 GroupName="DiagSubNav"
+                                 IsChecked="True">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE9D5;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="13"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <TextBlock Text="Logs" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </RadioButton>
                 </StackPanel>
 
                 <Grid Grid.Row="1"/>
@@ -109,7 +70,6 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Log header -->
             <Border Grid.Row="0"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,0,1"
@@ -172,13 +132,6 @@
                 </Grid>
             </Border>
 
-            <!--
-                Log content: read-only RichTextBox managed by
-                LogDocumentSync (constructed in code-behind on Loaded).
-                Native drag-select across lines, Ctrl+A, Ctrl+C.
-                Cursor is I-beam over text - standard Notepad-like
-                behavior.
-            -->
             <RichTextBox x:Name="LogView"
                          Grid.Row="1"
                          Style="{StaticResource LogRichTextBox}"/>

@@ -2,31 +2,24 @@ using Janus.Agent.Platform;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Windows.Data;
 using System.Windows.Threading;
-using Brush = System.Windows.Media.Brush;
 
 namespace Janus.Agent.Gui.ViewModels;
 
-// View model behind MainView. Holds the observable state MainView's
-// XAML binds to:
+// View model behind MainView.
 //
-//   Status group:      StatusText, StatusDot, PortInfo, IsConnected
-//   This-PC group:     ThisPc
-//   Active target:     ActiveTarget, ActiveTargetSuffix
-//   Last activity:     LastActivity
-//   Log:               LogLines (ObservableCollection<LogLine>)
-//   Search:            SearchText -- live filter over the log
+// LogLines: the source collection. Seeded from LogSink.Snapshot at
+// construction, appended live via LogSink.LineAdded. MainView's
+// LogDocumentSync mirrors it into a RichTextBox FlowDocument.
 //
-// Two update paths into the live state:
-//   * Periodic (500 ms DispatcherTimer) -- refreshes the status group
-//     and IsConnected from Serial's statics.
-//   * Reactive (LogSink.LineAdded) -- appends a new LogLine to the
-//     collection, marshalling onto the dispatcher.
+// PassesFilter: the filter predicate the sync consults. When
+// SearchText changes, MainView listens for the property change and
+// calls LogDocumentSync.Rebuild(). No CollectionViewSource
+// involvement anymore -- that was for ItemsControl, which we no
+// longer use.
 //
-// Settings-modal Cfg* properties moved out of this VM in the stage 1
-// split; they now live on GuiViewModel because the modal is a
-// window-level UI element (shared across Main and Diag tabs).
+// Cfg* modal properties moved to GuiViewModel in the stage 1 split
+// (window-level).
 
 internal sealed class MainViewModel : INotifyPropertyChanged
 {
@@ -91,11 +84,6 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         private set { if (_lastActivity != value) { _lastActivity = value; Raise(); } }
     }
 
-    // Bound to the action buttons' IsEnabled through DataContext
-    // inheritance into the ActionsPanel UserControl. When the serial
-    // port is down, Switch / Send-clipboard / Reconnect would all be
-    // no-ops on their underlying static methods; disabling the buttons
-    // makes that state visible.
     private bool _isConnected;
     public bool IsConnected
     {
@@ -114,8 +102,18 @@ internal sealed class MainViewModel : INotifyPropertyChanged
             if (_searchText == value) return;
             _searchText = value;
             Raise();
-            CollectionViewSource.GetDefaultView(LogLines).Refresh();
+            // View listens for this property change and rebuilds the
+            // FlowDocument through its LogDocumentSync.
         }
+    }
+
+    /// <summary>Filter predicate consulted by LogDocumentSync for
+    /// every appended line and for full rebuilds. Public so the view
+    /// can pass it as a Func delegate at sync construction.</summary>
+    public bool PassesFilter(LogLine line)
+    {
+        if (string.IsNullOrEmpty(_searchText)) return true;
+        return line.Message.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- Construction ------------------------------------------------
@@ -124,9 +122,6 @@ internal sealed class MainViewModel : INotifyPropertyChanged
     {
         _dispatcher = dispatcher;
         ThisPc = deviceId == "P" ? "Personal (P)" : "Work (W)";
-
-        var view = CollectionViewSource.GetDefaultView(LogLines);
-        view.Filter = LogFilter;
 
         foreach (LogLine line in LogSink.Snapshot())
         {
@@ -150,15 +145,6 @@ internal sealed class MainViewModel : INotifyPropertyChanged
     {
         try { _statusTimer.Stop(); } catch { }
         try { LogSink.LineAdded -= _onLineAdded; } catch { }
-    }
-
-    // ---- Log filter --------------------------------------------------
-
-    private bool LogFilter(object item)
-    {
-        if (item is not LogLine line) return false;
-        if (string.IsNullOrEmpty(_searchText)) return true;
-        return line.Message.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- Reactive path: new log line ---------------------------------

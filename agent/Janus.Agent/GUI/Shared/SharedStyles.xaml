@@ -135,6 +135,72 @@
         </Setter>
     </Style>
 
+    <!--
+        SelectableText: read-only TextBox styled to look like a TextBlock
+        but supports drag-selection and Ctrl+C copy. Standard Windows
+        trick used by Explorer's status bar and many dialogs.
+
+        All bindings TO Text must use Mode=OneWay since our VM properties
+        are read-only from the view's perspective (private setters).
+
+        Instance-level overrides set FontSize/Foreground/FontWeight/Margin
+        to match the specific text role (section label, sidebar value,
+        accent value, etc.). Base style keeps neutral defaults.
+    -->
+    <Style x:Key="SelectableText" TargetType="TextBox">
+        <Setter Property="IsReadOnly" Value="True"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Cursor" Value="IBeam"/>
+        <Setter Property="SelectionBrush" Value="#264F78"/>
+        <Setter Property="CaretBrush" Value="Transparent"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="TextWrapping" Value="NoWrap"/>
+        <Setter Property="Focusable" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderThickness="0"
+                            Padding="{TemplateBinding Padding}">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                    VerticalScrollBarVisibility="Hidden"
+                                    HorizontalScrollBarVisibility="Hidden"
+                                    Focusable="False"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        LogRichTextBox: the read-only, selectable log view. Text
+        formatting (colored per-level messages, muted prefix) is
+        constructed by LogDocumentSync as Paragraphs with two Runs
+        each. FlowDocument's default PagePadding + Paragraph margins
+        are zeroed there.
+    -->
+    <Style x:Key="LogRichTextBox" TargetType="RichTextBox">
+        <Setter Property="IsReadOnly" Value="True"/>
+        <Setter Property="Background" Value="{StaticResource BodyBrush}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="14,8,14,8"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Lucida Console, Courier New"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="SelectionBrush" Value="#264F78"/>
+        <Setter Property="CaretBrush" Value="Transparent"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="AcceptsReturn" Value="False"/>
+        <Setter Property="AcceptsTab" Value="False"/>
+        <Setter Property="AutoWordSelection" Value="False"/>
+    </Style>
+
     <Style x:Key="LabelCheckBox" TargetType="CheckBox">
         <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
         <Setter Property="FontSize" Value="11"/>
@@ -163,6 +229,152 @@
         </Setter>
     </Style>
 
+    <Style x:Key="LabelCheckBoxWordWrap" TargetType="CheckBox" BasedOn="{StaticResource LabelCheckBox}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="word-wrap"
+                                Foreground="{TemplateBinding Foreground}"
+                                VerticalAlignment="Center"/>
+                        <Border x:Name="Dot" Width="6" Height="6"
+                                Background="{StaticResource MutedBrush}"
+                                CornerRadius="3"
+                                Margin="6,1,0,0"
+                                VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            <Setter TargetName="Dot" Property="Background" Value="#73C991"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- TabControl: strip default chrome entirely. -->
+    <Style TargetType="TabControl">
+        <Setter Property="Background" Value="{StaticResource BodyBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!--
+                            Header strip: 1px bottom border across the full
+                            width, so unselected tabs sit on the line and
+                            the selected tab's colored accent replaces it
+                            underneath the active header.
+                        -->
+                        <Border Grid.Row="0"
+                                Background="{StaticResource SidebarBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="0,0,0,1">
+                            <TabPanel IsItemsHost="True"
+                                    Background="Transparent"
+                                    Margin="0"/>
+                        </Border>
+
+                        <Border Grid.Row="1"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter ContentSource="SelectedContent"/>
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        TabItem: transparent, muted text unselected. Selected gets
+        body-color text and a 2px AccentBlue underline that visually
+        replaces the header strip's bottom border in that segment.
+    -->
+    <Style TargetType="TabItem">
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Padding" Value="14,6"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="Transparent"
+                            BorderThickness="0,0,0,2"
+                            Padding="{TemplateBinding Padding}"
+                            Cursor="Hand"
+                            Margin="0,0,0,-1">
+                        <ContentPresenter x:Name="Content"
+                            ContentSource="Header"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            TextBlock.Foreground="{TemplateBinding Foreground}"
+                            TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource BodyBrush}"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBlue}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            <Setter Property="FontWeight" Value="Medium"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        Sub-nav item used inside DiagnosticsView's sidebar. Simple
+        icon + label row that toggles between "selected" (lighter grey
+        fill, brighter text) and "not selected" (transparent, muted).
+        Currently only Logs exists; Metrics and others will be siblings.
+    -->
+    <Style x:Key="SubNavItem" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Margin" Value="0,0,0,3"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Bd"
+                            Background="Transparent"
+                            CornerRadius="3"
+                            Padding="10,7">
+                        <ContentPresenter VerticalAlignment="Center"
+                                        TextBlock.Foreground="{TemplateBinding Foreground}"
+                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource ActiveBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+
     <Style x:Key="LogRowText" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Lucida Console, Courier New"/>
         <Setter Property="FontSize" Value="11.5"/>
@@ -182,6 +394,25 @@
     </Style>
 
     <Style x:Key="SettingsSectionHeader" TargetType="TextBlock" BasedOn="{StaticResource SectionLabel}">
+        <Setter Property="Margin" Value="0,0,0,10"/>
+    </Style>
+    
+    <Style x:Key="SelectableSettingsLabel" TargetType="TextBox" BasedOn="{StaticResource SelectableText}">
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        <Setter Property="Margin" Value="0,0,16,6"/>
+    </Style>
+
+    <Style x:Key="SelectableSettingsValue" TargetType="TextBox" BasedOn="{StaticResource SelectableText}">
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style x:Key="SelectableSettingsSectionHeader" TargetType="TextBox" BasedOn="{StaticResource SelectableText}">
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        <Setter Property="FontWeight" Value="Medium"/>
         <Setter Property="Margin" Value="0,0,0,10"/>
     </Style>
 

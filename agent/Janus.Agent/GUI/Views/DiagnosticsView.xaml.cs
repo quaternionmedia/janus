@@ -7,31 +7,28 @@ using System.Windows.Media;
 
 namespace Janus.Agent.Gui.Views;
 
-// Code-behind for MainView.
-//
-// LogDocumentSync (created on Loaded) owns the RichTextBox's
-// FlowDocument -- it mirrors MainViewModel.LogLines into Paragraphs,
-// applies the ViewModel's PassesFilter predicate, and manages
-// auto-scroll behavior. When SearchText changes on the VM, we call
-// Rebuild() to reapply the filter across the whole document.
+// Code-behind for DiagnosticsView. Mirrors MainView's structure --
+// same LogDocumentSync pattern, same auto-scroll checkbox behavior.
+// Stage 4 will extend the ViewModel-side filter predicate to include
+// level/category/source/time in addition to the current substring
+// search; the sync + code-behind here don't need to change for that
+// because they call PassesFilter opaquely.
 
-public partial class MainView : UserControl
+public partial class DiagnosticsView : UserControl
 {
-    private readonly MainViewModel _viewModel;
+    private readonly DiagnosticsViewModel _viewModel;
     private LogDocumentSync? _logSync;
 
-    public MainView()
+    public DiagnosticsView()
     {
         InitializeComponent();
 
-        _viewModel = new MainViewModel(Dispatcher, deviceId: GuiHost.DeviceId);
+        _viewModel = new DiagnosticsViewModel(Dispatcher);
         DataContext = _viewModel;
 
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
 
-        // ScrollViewer inside the RichTextBox isn't in the visual
-        // tree until Loaded, so defer sync construction until then.
-        Loaded += MainView_Loaded;
+        Loaded += DiagnosticsView_Loaded;
     }
 
     public void Shutdown()
@@ -41,7 +38,7 @@ public partial class MainView : UserControl
         _viewModel.Shutdown();
     }
 
-    private void MainView_Loaded(object sender, RoutedEventArgs e)
+    private void DiagnosticsView_Loaded(object sender, RoutedEventArgs e)
     {
         if (_logSync != null) return;
 
@@ -59,7 +56,7 @@ public partial class MainView : UserControl
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SearchText))
+        if (e.PropertyName == nameof(DiagnosticsViewModel.SearchText))
         {
             _logSync?.Rebuild();
         }

@@ -2,7 +2,6 @@ using Janus.Agent.Clipboard;
 using Janus.Agent.Events;
 using Janus.Agent.Platform;
 using System.Windows;
-using UserControl = System.Windows.Controls.UserControl;
 
 namespace Janus.Agent.Gui.Shared;
 
