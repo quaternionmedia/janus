@@ -120,7 +120,6 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <TextBox Grid.Column="0"
@@ -163,12 +162,6 @@
                             Style="{StaticResource LabelCheckBoxWordWrap}"
                             Margin="0,0,14,0"
                             Click="WordWrapCheck_Click"/>
-                    <CheckBox Grid.Column="4"
-                              x:Name="AutoScrollCheck"
-                              IsChecked="True"
-                              VerticalAlignment="Center"
-                              Style="{StaticResource LabelCheckBox}"
-                              Click="AutoScrollCheck_Click"/>
                 </Grid>
             </Border>
 
@@ -179,9 +172,19 @@
                 Cursor is I-beam over text - standard Notepad-like
                 behavior.
             -->
-            <RichTextBox x:Name="LogView"
-                         Grid.Row="1"
-                         Style="{StaticResource LogRichTextBox}"/>
+            <Grid Grid.Row="1">
+                <RichTextBox x:Name="LogView" Style="{StaticResource LogRichTextBox}"/>
+                
+                <!-- Jump to bottom overlay -->
+                <Button x:Name="JumpToBottomButton"
+                        Style="{StaticResource JumpToBottomPill}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Margin="0,0,20,20"
+                        Visibility="Collapsed"
+                        Content="&#xE70D;"
+                        Click="JumpToBottom_Click"/>
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

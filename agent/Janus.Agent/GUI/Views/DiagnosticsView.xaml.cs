@@ -19,7 +19,8 @@ public partial class DiagnosticsView : UserControl
 {
     private readonly DiagnosticsViewModel _viewModel;
     private LogDocumentSync? _logSync;
-
+    private bool _snapNextRebuild;
+    
     public DiagnosticsView()
     {
         InitializeComponent();
@@ -34,7 +35,11 @@ public partial class DiagnosticsView : UserControl
     public void Shutdown()
     {
         try { _viewModel.PropertyChanged -= ViewModel_PropertyChanged; } catch { }
-        try { _logSync?.Detach(); } catch { }
+        if (_logSync != null)
+        {
+            try { _logSync.ScrollStateChanged -= LogSync_ScrollStateChanged; } catch { }
+            try { _logSync.Detach(); } catch { }
+        }
         _viewModel.Shutdown();
     }
 
@@ -49,9 +54,10 @@ public partial class DiagnosticsView : UserControl
             filter:      _viewModel.PassesFilter,
             prefixBrush: mutedBrush)
         {
-            AutoScrollEnabled = AutoScrollCheck.IsChecked == true,
             WordWrapEnabled   = WordWrapCheck.IsChecked == true,
         };
+
+        _logSync.ScrollStateChanged += LogSync_ScrollStateChanged;
     }
 
     private void DiagnosticsView_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -63,32 +69,21 @@ public partial class DiagnosticsView : UserControl
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == DiagnosticsViewModel.FilterChangedSignal)
+        if (e.PropertyName == nameof(DiagnosticsViewModel.SelectedDate))
         {
-            // Any filter criterion changed -- re-run predicate
-            // against every line, re-emit paragraphs. LogDocumentSync
-            // handles the re-scroll if AutoScroll is on.
-            _logSync?.Rebuild();
+            _snapNextRebuild = true;
         }
-        else if (e.PropertyName == nameof(DiagnosticsViewModel.IsViewingToday))
+        else if (e.PropertyName == DiagnosticsViewModel.FilterChangedSignal)
         {
-            HandleTodayViewingChange();
-        }
-    }
-
-    /// <summary>When toggling in/out of historical mode, adjust the
-    /// auto-scroll checkbox. Historical view is a frozen snapshot,
-    /// so auto-scroll has nothing to follow -- disable it. Going
-    /// back to today re-enables it and defaults it to on (user's
-    /// preferred behavior per the spec).</summary>
-    private void HandleTodayViewingChange()
-    {
-        bool viewingToday = _viewModel.IsViewingToday;
-        AutoScrollCheck.IsEnabled = viewingToday;
-        AutoScrollCheck.IsChecked = viewingToday;
-        if (_logSync != null)
-        {
-            _logSync.AutoScrollEnabled = viewingToday;
+            if (_snapNextRebuild)
+            {
+                _snapNextRebuild = false;
+                _logSync?.RebuildAndScrollToEnd();
+            }
+            else
+            {
+                _logSync?.Rebuild();
+            }
         }
     }
 
@@ -146,13 +141,15 @@ public partial class DiagnosticsView : UserControl
         _logSync.WordWrapEnabled = WordWrapCheck.IsChecked == true;
     }
 
-    private void AutoScrollCheck_Click(object sender, RoutedEventArgs e)
+    private void LogSync_ScrollStateChanged(bool isAtBottom)
     {
-        if (_logSync == null) return;
-        _logSync.AutoScrollEnabled = AutoScrollCheck.IsChecked == true;
-        if (_logSync.AutoScrollEnabled)
-        {
-            _logSync.ScrollToEnd();
-        }
+        JumpToBottomButton.Visibility = isAtBottom
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void JumpToBottom_Click(object sender, RoutedEventArgs e)
+    {
+        _logSync?.ScrollToEnd();
     }
 }

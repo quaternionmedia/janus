@@ -8,32 +8,24 @@ using System.Windows.Media;
 namespace Janus.Agent.Gui.Shared;
 
 // Bridges an ObservableCollection<LogLine> to a RichTextBox's
-// FlowDocument. Handles three concerns the built-in
-// ItemsControl+CollectionView pattern would give us for free, but
-// which we lose by moving to RichTextBox (needed for text
-// selection):
+// FlowDocument. Handles three concerns:
 //
 //   1. Sync   -- CollectionChanged events on the source collection
 //                translate to Paragraph adds/removes on the document,
 //                respecting the current filter predicate.
-//   2. Filter -- external Refilter() call rebuilds the visible set
-//                (called by the view when the VM's SearchText or,
-//                later, other filter state changes).
-//   3. Scroll -- tracks whether the user has scrolled up. Autoscroll,
-//                when enabled, snaps to bottom on new content only if
-//                the user hadn't manually scrolled up.
+//   2. Filter -- external Rebuild() call rebuilds the visible set
+//                (called by the view when filter state changes).
+//   3. Scroll -- always pins to bottom when new content arrives IF
+//                the user was at the bottom. If the user has
+//                scrolled up, new content lands off-screen and the
+//                view stays put. Standard Notepad++ / VS Code
+//                output behavior. When at-bottom state flips
+//                (either direction), ScrollStateChanged fires so
+//                the view can show/hide its jump-to-bottom pill.
 //
-// Why not ScrollViewer.ScrollToEnd bound to a property? RichTextBox
-// doesn't expose its inner ScrollViewer directly -- it's inside the
-// control template as PART_ContentHost. FindDescendant<ScrollViewer>
-// after Loaded is the standard way to grab it.
-//
-// Remove handling: MainViewModel/DiagnosticsViewModel trim the
-// oldest entry when the buffer exceeds MaxLines. Each RemoveAt(0)
-// fires a Remove event; we pop the first paragraph iff the removed
-// LogLine had passed the filter (in which case it was the first
-// paragraph in the document, matching insertion order). Correct and
-// O(1) instead of the O(n) rebuild-on-remove approach.
+// No AutoScrollEnabled toggle -- the pin-to-bottom-if-at-bottom
+// behavior is universal. The view surfaces a manual "jump to
+// bottom" pill that becomes visible when the user is scrolled up.
 
 internal sealed class LogDocumentSync
 {
@@ -46,18 +38,13 @@ internal sealed class LogDocumentSync
     private ScrollViewer? _scrollViewer;
     private bool _wasAtBottom = true;
 
-    public bool AutoScrollEnabled { get; set; } = true;
-    public bool WordWrapEnabled
-    {
-        get => double.IsNaN(_doc.PageWidth);
-        set
-        {
-            // NaN = wrap to viewport width. Large finite value = no wrap
-            // (horizontal scrollbar takes over instead).
-            _doc.PageWidth = value ? double.NaN : 9999;
-        }
-    }
-    
+    /// <summary>Fires whenever the user's scroll position crosses
+    /// the "at bottom" threshold. Argument is the new IsAtBottom
+    /// state (true = at bottom, false = scrolled up).</summary>
+    public event Action<bool>? ScrollStateChanged;
+
+    public bool IsAtBottom => _wasAtBottom;
+
     public LogDocumentSync(
         RichTextBox richTextBox,
         ObservableCollection<LogLine> source,
@@ -77,8 +64,6 @@ internal sealed class LogDocumentSync
         };
         _rtb.Document = _doc;
 
-        // ScrollViewer isn't in the visual tree until the RichTextBox
-        // has been laid out. Loaded is the earliest reliable hook.
         _rtb.Loaded += (_, _) => AttachScrollViewer();
 
         _source.CollectionChanged += OnSourceChanged;
@@ -95,9 +80,12 @@ internal sealed class LogDocumentSync
         }
     }
 
-    /// <summary>Rebuild the entire visible document from the source
-    /// collection. Called on filter changes. Preserves auto-scroll
-    /// pin state.</summary>
+    public bool WordWrapEnabled
+    {
+        get => double.IsNaN(_doc.PageWidth);
+        set => _doc.PageWidth = value ? double.NaN : 9999;
+    }
+
     public void Rebuild()
     {
         _doc.Blocks.Clear();
@@ -108,19 +96,19 @@ internal sealed class LogDocumentSync
                 _doc.Blocks.Add(BuildParagraph(line));
             }
         }
-        if (AutoScrollEnabled)
+        if (_wasAtBottom)
         {
             _rtb.ScrollToEnd();
         }
     }
 
-    /// <summary>Force scroll to the bottom regardless of auto-scroll
-    /// state. Called when the user re-enables the auto-scroll
-    /// checkbox.</summary>
+    /// <summary>Force scroll to the bottom. Called by the view when
+    /// the user clicks the jump-to-bottom pill.</summary>
     public void ScrollToEnd()
     {
         _rtb.ScrollToEnd();
-        _wasAtBottom = true;
+        // The subsequent ScrollChanged will set _wasAtBottom = true
+        // and fire ScrollStateChanged, causing the pill to hide.
     }
 
     // ---- Source -> document sync -----------------------------------
@@ -137,16 +125,13 @@ internal sealed class LogDocumentSync
                         _doc.Blocks.Add(BuildParagraph(line));
                     }
                 }
-                if (AutoScrollEnabled && _wasAtBottom)
+                if (_wasAtBottom)
                 {
                     _rtb.ScrollToEnd();
                 }
                 break;
 
             case NotifyCollectionChangedAction.Remove when e.OldItems != null:
-                // Source only ever removes at index 0 (buffer trim).
-                // Corresponding paragraph is the first one in the doc,
-                // iff the removed line had passed the filter.
                 foreach (LogLine line in e.OldItems)
                 {
                     if (_filter(line) && _doc.Blocks.FirstBlock != null)
@@ -191,18 +176,26 @@ internal sealed class LogDocumentSync
     {
         if (e.ExtentHeightChange > 0)
         {
-            if (AutoScrollEnabled && _wasAtBottom)
+            // New content added. Snap to bottom iff the user was
+            // already there; otherwise let the new content land
+            // off-screen so the user's reading position is preserved.
+            if (_wasAtBottom)
             {
                 _rtb.ScrollToEnd();
             }
         }
         else if (e.VerticalChange != 0)
         {
-            _wasAtBottom = IsAtBottom();
+            bool nowAtBottom = ComputeIsAtBottom();
+            if (nowAtBottom != _wasAtBottom)
+            {
+                _wasAtBottom = nowAtBottom;
+                ScrollStateChanged?.Invoke(nowAtBottom);
+            }
         }
     }
 
-    private bool IsAtBottom()
+    private bool ComputeIsAtBottom()
     {
         if (_scrollViewer == null) return true;
         if (_scrollViewer.ScrollableHeight <= 0) return true;
@@ -220,5 +213,20 @@ internal sealed class LogDocumentSync
             if (found != null) return found;
         }
         return null;
+    }
+
+    /// <summary>Full rebuild with a forced snap to bottom regardless of
+    /// prior scroll position. Called by the view on date change so a
+    /// fresh day always lands at the newest events.</summary>
+    public void RebuildAndScrollToEnd()
+    {
+        _wasAtBottom = true;
+        Rebuild();
+        // Rebuild's ScrollToEnd already fires because _wasAtBottom is
+        // now true, but call it again explicitly in case the previous
+        // scroll state left the underlying ScrollViewer wonky after
+        // the doc rebuild.
+        _rtb.ScrollToEnd();
+        ScrollStateChanged?.Invoke(true);
     }
 }

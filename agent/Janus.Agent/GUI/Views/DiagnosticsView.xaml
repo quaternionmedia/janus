@@ -261,12 +261,11 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- SEARCH row + auto-scroll + word-wrap -->
+                    <!-- SEARCH row + word-wrap -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="60"/>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0"
@@ -332,13 +331,6 @@
                                   Style="{StaticResource LabelCheckBoxWordWrap}"
                                   Margin="14,0,14,0"
                                   Click="WordWrapCheck_Click"/>
-
-                        <CheckBox Grid.Column="3"
-                                  x:Name="AutoScrollCheck"
-                                  IsChecked="True"
-                                  VerticalAlignment="Center"
-                                  Style="{StaticResource LabelCheckBox}"
-                                  Click="AutoScrollCheck_Click"/>
                     </Grid>
                 </StackPanel>
             </Border>
@@ -346,8 +338,7 @@
             <!-- Log area: RichTextBox + overlay states (loading,
                  empty, missing file). -->
             <Grid Grid.Row="1">
-                <RichTextBox x:Name="LogView"
-                             Style="{StaticResource LogRichTextBox}"/>
+                <RichTextBox x:Name="LogView" Style="{StaticResource LogRichTextBox}"/>
 
                 <!-- Loading overlay -->
                 <Border Background="#88000000"
@@ -388,6 +379,16 @@
                     </TextBlock.Style>
                     <Run Text="No logs for the selected date."/>
                 </TextBlock>
+
+                <!-- Jump to bottom overlay -->
+                <Button x:Name="JumpToBottomButton"
+                    Style="{StaticResource JumpToBottomPill}"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    Margin="0,0,20,20"
+                    Visibility="Collapsed"
+                    Content="&#xE70D;"
+                    Click="JumpToBottom_Click"/>
             </Grid>
         </Grid>
     </Grid>

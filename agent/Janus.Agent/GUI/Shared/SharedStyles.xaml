@@ -104,6 +104,88 @@
     </Style>
 
     <!--
+        JumpToBottomPill: floating circular button shown at bottom-right
+        of the log pane when the user has scrolled up. Click scrolls to
+        bottom. Hidden when the user is already at the bottom.
+    -->
+    <Style x:Key="JumpToBottomPill" TargetType="Button">
+        <Setter Property="Width" Value="32"/>
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="Background" Value="#DD2D2D30"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="ToolTip" Value="Jump to bottom"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="16"
+                            Cursor="Hand">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.4"/>
+                        </Border.Effect>
+                        <ContentPresenter HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.Foreground="{TemplateBinding Foreground}"
+                                        TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#FF3E3E42"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        MiniButton: small labeled button used for time-range presets
+        (+5m, +30m, +1h, Reset, Now, Today). AccentBlue text on
+        transparent background with a subtle border.
+    -->
+    <Style x:Key="MiniButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource AccentBlue}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="8,2"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="Margin" Value="0,0,4,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="3"
+                            Padding="{TemplateBinding Padding}"
+                            Cursor="Hand">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.Foreground="{TemplateBinding Foreground}"
+                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
         Dark-themed TextBox used for the log search input. The default
         WPF TextBox has a light-blue selection highlight and a white
         background no matter what we have to template it to get a
@@ -179,45 +261,6 @@
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="Bd" Property="Cursor" Value="Arrow"/>
                             <Setter Property="Opacity" Value="0.4"/>
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!--
-        MiniButton: small labeled button used for time-range presets
-        (+5m, +30m, +1h, Reset, Now, Today). AccentBlue text on
-        transparent background with a subtle border.
-    -->
-    <Style x:Key="MiniButton" TargetType="Button">
-        <Setter Property="Foreground" Value="{StaticResource AccentBlue}"/>
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="8,2"/>
-        <Setter Property="FontSize" Value="10.5"/>
-        <Setter Property="Margin" Value="0,0,4,0"/>
-        <Setter Property="VerticalAlignment" Value="Center"/>
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bd"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="3"
-                            Padding="{TemplateBinding Padding}"
-                            Cursor="Hand">
-                        <ContentPresenter HorizontalAlignment="Center"
-                                        VerticalAlignment="Center"
-                                        TextBlock.Foreground="{TemplateBinding Foreground}"
-                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

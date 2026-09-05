@@ -37,7 +37,11 @@ public partial class MainView : UserControl
     public void Shutdown()
     {
         try { _viewModel.PropertyChanged -= ViewModel_PropertyChanged; } catch { }
-        try { _logSync?.Detach(); } catch { }
+        if (_logSync != null)
+        {
+            try { _logSync.ScrollStateChanged -= LogSync_ScrollStateChanged; } catch { }
+            try { _logSync.Detach(); } catch { }
+        }
         _viewModel.Shutdown();
     }
 
@@ -52,9 +56,10 @@ public partial class MainView : UserControl
             filter:      _viewModel.PassesFilter,
             prefixBrush: mutedBrush)
         {
-            AutoScrollEnabled = AutoScrollCheck.IsChecked == true,
             WordWrapEnabled = WordWrapCheck.IsChecked == true,
         };
+        
+        _logSync.ScrollStateChanged += LogSync_ScrollStateChanged;
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -64,20 +69,22 @@ public partial class MainView : UserControl
             _logSync?.Rebuild();
         }
     }
-
-    private void AutoScrollCheck_Click(object sender, RoutedEventArgs e)
-    {
-        if (_logSync == null) return;
-        _logSync.AutoScrollEnabled = AutoScrollCheck.IsChecked == true;
-        if (_logSync.AutoScrollEnabled)
-        {
-            _logSync.ScrollToEnd();
-        }
-    }
     
     private void WordWrapCheck_Click(object sender, RoutedEventArgs e)
     {
         if (_logSync == null) return;
         _logSync.WordWrapEnabled = WordWrapCheck.IsChecked == true;
+    }
+    
+    private void LogSync_ScrollStateChanged(bool isAtBottom)
+    {
+        JumpToBottomButton.Visibility = isAtBottom
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private void JumpToBottom_Click(object sender, RoutedEventArgs e)
+    {
+        _logSync?.ScrollToEnd();
     }
 }
