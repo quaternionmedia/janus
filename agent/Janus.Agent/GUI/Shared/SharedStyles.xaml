@@ -136,6 +136,146 @@
     </Style>
 
     <!--
+        FilterChip: toggleable pill used by the Diagnostics filter bar
+        (level chips, category chips, source chips).
+
+        Checked  = brighter fill, TextBrush foreground = "shown"
+        Unchecked = transparent + muted = "hidden"
+        Disabled = greyed out + no hover (used for Controller/Bridge
+                source chips until Phase 4 wires cross-source logs)
+    -->
+    <Style x:Key="FilterChip" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="8,2"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="Margin" Value="0,0,4,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="3"
+                            Padding="{TemplateBinding Padding}"
+                            Cursor="Hand">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.Foreground="{TemplateBinding Foreground}"
+                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource ActiveBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Cursor" Value="Arrow"/>
+                            <Setter Property="Opacity" Value="0.4"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        MiniButton: small labeled button used for time-range presets
+        (+5m, +30m, +1h, Reset, Now, Today). AccentBlue text on
+        transparent background with a subtle border.
+    -->
+    <Style x:Key="MiniButton" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource AccentBlue}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="8,2"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="Margin" Value="0,0,4,0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="3"
+                            Padding="{TemplateBinding Padding}"
+                            Cursor="Hand">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        TextBlock.Foreground="{TemplateBinding Foreground}"
+                                        TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        DatePickerTextBox is the internal TextBox part of DatePicker.
+        Targeted globally (no x:Key) so any DatePicker in the app picks
+        it up. Only affects the input field; the calendar popup keeps
+        default styling (users see it briefly during selection).
+    -->
+    <Style TargetType="{x:Type DatePickerTextBox}">
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="Background" Value="#1E1E1E"/>
+        <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
+        <Setter Property="SelectionBrush" Value="#264F78"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Lucida Console, Courier New"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type DatePickerTextBox}">
+                    <ScrollViewer x:Name="PART_ContentHost"
+                                Padding="6,2"
+                                VerticalAlignment="Center"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        DarkDatePicker: applies our dark background + border to the
+        DatePicker container itself.
+    -->
+    <Style x:Key="DarkDatePicker" TargetType="DatePicker">
+        <Setter Property="Background" Value="#1E1E1E"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="FontSize" Value="11.5"/>
+    </Style>
+
+    <!--
+        TimeInput: plain dark TextBox for HH:mm:ss entry. Narrower than
+        DarkTextBox and text-aligned center.
+    -->
+    <Style x:Key="TimeInput" TargetType="TextBox" BasedOn="{StaticResource DarkTextBox}">
+        <Setter Property="Width" Value="80"/>
+        <Setter Property="TextAlignment" Value="Center"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Padding" Value="4,2"/>
+    </Style>
+
+
+    <!--
         SelectableText: read-only TextBox styled to look like a TextBlock
         but supports drag-selection and Ctrl+C copy. Standard Windows
         trick used by Explorer's status bar and many dialogs.

@@ -107,11 +107,45 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Filter predicate consulted by LogDocumentSync for
+    /// <summary>
+    /// Filter predicate consulted by LogDocumentSync for
     /// every appended line and for full rebuilds. Public so the view
-    /// can pass it as a Func delegate at sync construction.</summary>
+    /// can pass it as a Func delegate at sync construction.
+    /// </summary>
     public bool PassesFilter(LogLine line)
     {
+        // Main tab's fixed filter: show anything users care about at
+        // a glance, hide the rest. Anything not shown here is available
+        // on the Diagnostics tab (which has no default filter).
+        //
+        //   - Switch/Clipboard/Serial events show regardless of level
+        //     (they're the "what's happening on the wire" categories
+        //     that motivate opening the GUI in the first place)
+        //   - Errors and warnings show regardless of category (so
+        //     anything actionable surfaces on Main even if it's from
+        //     Keyboard/Mouse/System)
+        //   - Everything else (Info/Debug/Verbose from Keyboard/Mouse/
+        //     System) is hidden -- routine chatter, doesn't earn Main
+        //     view real estate
+        //
+        // Search text, if any, is applied ON TOP of the category/level
+        // gate -- so search narrows within the visible set, doesn't
+        // widen it.
+
+        // Verbose is diagnostic-only -- never appears on Main. Diag can
+        // toggle it via the TRACE chip.
+        if (line.Level == LogLevel.Verbose) return false;
+
+        bool categoryOrLevelPasses =
+               line.Category == LogCategory.Switch
+            || line.Category == LogCategory.Clipboard
+            || line.Category == LogCategory.Serial
+            || line.Category == LogCategory.System
+            || line.Level    == LogLevel.Error
+            || line.Level    == LogLevel.Warn;
+
+        if (!categoryOrLevelPasses) return false;
+
         if (string.IsNullOrEmpty(_searchText)) return true;
         return line.Message.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
     }

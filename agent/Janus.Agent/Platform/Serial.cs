@@ -188,7 +188,6 @@ internal static class Serial
             // "changed" and pushes it to the router. Without this, the
             // router's belief of our cursor position can lag the real
             // one by an entire session until the next real cursor move.
-            Log.System.Verbose("TARGET echo: {ActiveTarget}", activeTarget);
             if (!wasActive && IsActiveTarget)
             {
                 _lastCursorX = int.MinValue;
@@ -307,7 +306,10 @@ internal static class Serial
         }
 
         port.WriteLine(displayMessage);
-        Log.System.Verbose("display sent: {DisplayMessage}", displayMessage);
+        if (changed)
+        {
+            Log.System.Debug("display sent: {DisplayMessage}", displayMessage);
+        }
 
         _lastDisplayMessage = displayMessage;
         _displaySentForCurrentConnection = true;
@@ -340,7 +342,9 @@ internal static class Serial
         }
 
         port.WriteLine($"CURSOR {deviceId} X={point.X} Y={point.Y}");
-        Log.Mouse.Verbose("cursor sent: {PointX}, {PointY}", point.X, point.Y);
+        // NOTE: Below log is too noisy, would spam log file to ~2M lines per day. 
+        //       Keep it commented out unless debugging cursor issues.
+        //Log.Mouse.Verbose("cursor sent: {PointX}, {PointY}", point.X, point.Y);
         _lastCursorX = point.X;
         _lastCursorY = point.Y;
         _lastCursorSentUtc = DateTime.UtcNow;

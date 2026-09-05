@@ -53,7 +53,7 @@ public partial class MainView : UserControl
             prefixBrush: mutedBrush)
         {
             AutoScrollEnabled = AutoScrollCheck.IsChecked == true,
-            WordWrapEnabled = WordWrapCheck.IsChecked == true
+            WordWrapEnabled = WordWrapCheck.IsChecked == true,
         };
     }
 

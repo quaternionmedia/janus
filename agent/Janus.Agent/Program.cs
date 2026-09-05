@@ -108,7 +108,7 @@ internal static class Program
         LoggerConfiguration loggerConfig = new LoggerConfiguration()
             .ReadFrom.Configuration(appConfig)
             .WriteTo.File(
-                formatter: new CompactJsonFormatter(),
+                formatter: new RenderedCompactJsonFormatter(),
                 path: logPath,
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30,
@@ -123,6 +123,7 @@ internal static class Program
             Win32.AttachConsole(Win32.ATTACH_PARENT_PROCESS);
 
             loggerConfig = loggerConfig.WriteTo.Console(
+                restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Debug,
                 theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Code,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u5} [{Category:1}] {Message:lj} {NewLine}{Exception}");
         }

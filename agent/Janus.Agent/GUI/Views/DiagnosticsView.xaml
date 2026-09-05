@@ -37,12 +37,6 @@
                              FontWeight="Medium"
                              Margin="0,0,0,10"/>
 
-                    <!--
-                        Sub-nav item stays a RadioButton (interactive
-                        control, not text to copy). GroupName ties
-                        future siblings (Metrics etc.) so only one is
-                        selected at a time.
-                    -->
                     <RadioButton Style="{StaticResource SubNavItem}"
                                  GroupName="DiagSubNav"
                                  IsChecked="True">
@@ -63,51 +57,59 @@
             </Grid>
         </Border>
 
-        <!-- ============ LOG ============ -->
+        <!-- ============ MAIN CONTENT ============ -->
         <Grid Grid.Column="1" Background="{StaticResource BodyBrush}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
+            <!-- Filter bar. Each row is [label 60px] [content]. -->
             <Border Grid.Row="0"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,0,1"
                     Padding="14,10,14,10">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                <StackPanel>
 
-                    <TextBox Grid.Column="0"
-                             Text="LOG"
-                             Style="{StaticResource SelectableText}"
-                             FontSize="10.5"
-                             Foreground="{StaticResource MutedBrush}"
-                             FontWeight="Medium"
-                             Margin="0,2,16,0"
-                             VerticalAlignment="Center"/>
-
-                    <Grid Grid.Column="1" Width="220" VerticalAlignment="Center">
-                        <TextBox x:Name="SearchBox"
-                                 Style="{StaticResource DarkTextBox}"
-                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
-                        <TextBlock IsHitTestVisible="False"
-                                   Text="filter log&#x2026;"
-                                   Foreground="{StaticResource FaintBrush}"
-                                   FontFamily="Cascadia Mono, Consolas, Lucida Console, Courier New"
-                                   FontSize="11.5"
+                    <!-- DATE row -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="DATE"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+                        <DatePicker Grid.Column="1"
+                                    x:Name="DatePickerField"
+                                    Style="{StaticResource DarkDatePicker}"
+                                    Width="130"
+                                    SelectedDate="{Binding SelectedDate, Mode=TwoWay}"
+                                    DisplayDateEnd="{Binding TodayDate, Mode=OneWay}"
+                                    ToolTip="{Binding HistoricalTooltip}"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,8,0"/>
+                        <Button Grid.Column="2"
+                                Style="{StaticResource MiniButton}"
+                                Content="Today"
+                                Click="TodayButton_Click"/>
+                        <!-- Historical indicator: visible only when
+                             not viewing today. -->
+                        <TextBlock Grid.Column="3"
+                                   Text="&#x25CF; historical view"
+                                   Foreground="#DCDCAA"
+                                   FontSize="10.5"
                                    VerticalAlignment="Center"
                                    Margin="8,0,0,0">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                        <DataTrigger Binding="{Binding IsViewingToday}" Value="False">
                                             <Setter Property="Visibility" Value="Visible"/>
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -116,25 +118,277 @@
                         </TextBlock>
                     </Grid>
 
-                    <CheckBox Grid.Column="3"
-                            x:Name="WordWrapCheck"
-                            IsChecked="True"
-                            VerticalAlignment="Center"
-                            Style="{StaticResource LabelCheckBoxWordWrap}"
-                            Margin="0,0,14,0"
-                            Click="WordWrapCheck_Click"/>
-                    <CheckBox Grid.Column="4"
-                              x:Name="AutoScrollCheck"
-                              IsChecked="True"
-                              VerticalAlignment="Center"
-                              Style="{StaticResource LabelCheckBox}"
-                              Click="AutoScrollCheck_Click"/>
-                </Grid>
+                    <!-- TIME row -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="TIME"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <TextBox Style="{StaticResource TimeInput}"
+                                     Text="{Binding TimeFromText, UpdateSourceTrigger=LostFocus, Mode=TwoWay}"
+                                     Margin="0,0,4,0"/>
+                            <Button Style="{StaticResource MiniButton}"
+                                    Content="Now"
+                                    Click="NowButton_Click"/>
+                            <TextBlock Text="to"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center"
+                                       Margin="4,0,8,0"/>
+                            <TextBox Style="{StaticResource TimeInput}"
+                                     Text="{Binding TimeToText, UpdateSourceTrigger=LostFocus, Mode=TwoWay}"
+                                     Margin="0,0,4,0"/>
+                            <Button Style="{StaticResource MiniButton}"
+                                    Content="+5m"
+                                    Tag="5"
+                                    Click="PresetPlus_Click"/>
+                            <Button Style="{StaticResource MiniButton}"
+                                    Content="+30m"
+                                    Tag="30"
+                                    Click="PresetPlus_Click"/>
+                            <Button Style="{StaticResource MiniButton}"
+                                    Content="+1h"
+                                    Tag="60"
+                                    Click="PresetPlus_Click"/>
+                            <TextBlock Text="|"
+                                       Foreground="{StaticResource BorderBrush}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center"
+                                       Margin="4,0,8,0"/>
+                            <Button Style="{StaticResource MiniButton}"
+                                    Content="Reset"
+                                    Click="ResetTimeButton_Click"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- LEVEL row -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="LEVEL"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="TRACE"
+                                          IsChecked="{Binding IsTrace, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="DEBUG"
+                                          IsChecked="{Binding IsDebug, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="INFO"
+                                          IsChecked="{Binding IsInfo, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="WARN"
+                                          IsChecked="{Binding IsWarn, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="ERROR"
+                                          IsChecked="{Binding IsError, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- CATEGORY row -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="CAT"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Serial"
+                                          IsChecked="{Binding IsCatSerial, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Switch"
+                                          IsChecked="{Binding IsCatSwitch, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Clipboard"
+                                          IsChecked="{Binding IsCatClipboard, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Keyboard"
+                                          IsChecked="{Binding IsCatKeyboard, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Mouse"
+                                          IsChecked="{Binding IsCatMouse, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="System"
+                                          IsChecked="{Binding IsCatSystem, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- SOURCE row (Controller / Bridge disabled) -->
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="SRC"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Agent"
+                                          IsChecked="{Binding IsSrcAgent, Mode=TwoWay}"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Controller"
+                                          IsChecked="False"
+                                          IsEnabled="False"/>
+                            <ToggleButton Style="{StaticResource FilterChip}"
+                                          Content="Bridge"
+                                          IsChecked="False"
+                                          IsEnabled="False"/>
+                            <TextBlock Text="not yet wired"
+                                       Foreground="{StaticResource FaintBrush}"
+                                       FontSize="10.5"
+                                       VerticalAlignment="Center"
+                                       Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- SEARCH row + auto-scroll + word-wrap -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="SEARCH"
+                                   Style="{StaticResource SectionLabel}"
+                                   Margin="0"
+                                   VerticalAlignment="Center"/>
+
+                        <!-- Search input: text box with X-clear on right and
+                             a search icon that focuses the box on click. -->
+                        <Grid Grid.Column="1" VerticalAlignment="Center">
+                            <TextBox x:Name="SearchBox"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Padding="6,3,52,3"
+                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                            <TextBlock IsHitTestVisible="False"
+                                       Text="filter log&#x2026;"
+                                       Foreground="{StaticResource FaintBrush}"
+                                       FontFamily="Cascadia Mono, Consolas, Lucida Console, Courier New"
+                                       FontSize="11.5"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <StackPanel Orientation="Horizontal"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        Margin="0,0,4,0">
+                                <Button Style="{StaticResource IconButton}"
+                                        ToolTip="Clear"
+                                        Click="ClearSearch_Click"
+                                        Padding="4,2">
+                                    <TextBlock Text="&#xE8BB;"
+                                               FontFamily="{StaticResource IconFont}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedBrush}"/>
+                                </Button>
+                                <!-- <Button Style="{StaticResource IconButton}"
+                                        ToolTip="Search"
+                                        Click="SearchIcon_Click"
+                                        Padding="4,2">
+                                    <TextBlock Text="&#xE721;"
+                                               FontFamily="{StaticResource IconFont}"
+                                               FontSize="11"
+                                               Foreground="{StaticResource AccentBlue}"/>
+                                </Button> -->
+                            </StackPanel>
+                        </Grid>
+
+                        <CheckBox Grid.Column="2"
+                                  x:Name="WordWrapCheck"
+                                  IsChecked="True"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource LabelCheckBoxWordWrap}"
+                                  Margin="14,0,14,0"
+                                  Click="WordWrapCheck_Click"/>
+
+                        <CheckBox Grid.Column="3"
+                                  x:Name="AutoScrollCheck"
+                                  IsChecked="True"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource LabelCheckBox}"
+                                  Click="AutoScrollCheck_Click"/>
+                    </Grid>
+                </StackPanel>
             </Border>
 
-            <RichTextBox x:Name="LogView"
-                         Grid.Row="1"
-                         Style="{StaticResource LogRichTextBox}"/>
+            <!-- Log area: RichTextBox + overlay states (loading,
+                 empty, missing file). -->
+            <Grid Grid.Row="1">
+                <RichTextBox x:Name="LogView"
+                             Style="{StaticResource LogRichTextBox}"/>
+
+                <!-- Loading overlay -->
+                <Border Background="#88000000"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsLoadingHistoricalDay}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="Loading historical log&#x2026;"
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="13"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                </Border>
+
+                <!-- Missing file overlay -->
+                <TextBlock Foreground="{StaticResource MutedBrush}"
+                           FontSize="12"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           IsHitTestVisible="False">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasNoFileForSelectedDate}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                    <Run Text="No logs for the selected date."/>
+                </TextBlock>
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>
