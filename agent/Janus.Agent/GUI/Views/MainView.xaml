@@ -1,0 +1,190 @@
+<UserControl x:Class="Janus.Agent.Gui.Views.MainView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shared="clr-namespace:Janus.Agent.Gui.Shared">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/GUI/Shared/SharedStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ============ SIDEBAR ============ -->
+        <Border Grid.Column="0"
+                Background="{StaticResource SidebarBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="18,18,18,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!--
+                    All static labels and bound values are now
+                    SelectableText TextBoxes so text can be highlighted
+                    and copied like anywhere else on Windows. Section
+                    labels use FontSize 10.5 muted + medium weight (was
+                    the SectionLabel TextBlock style); values use the
+                    style defaults (13, TextBrush).
+                -->
+                <StackPanel Grid.Row="0">
+                    <TextBox Text="STATUS"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="10.5"
+                             Foreground="{StaticResource MutedBrush}"
+                             FontWeight="Medium"
+                             Margin="0,0,0,6"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                        <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding StatusDot}"/>
+                        <TextBox Text="{Binding StatusText, Mode=OneWay}"
+                                 Style="{StaticResource SelectableText}"
+                                 Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <TextBox Text="{Binding PortInfo, Mode=OneWay}"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="11"
+                             Foreground="{StaticResource FaintBrush}"
+                             Margin="16,0,0,18"/>
+
+                    <TextBox Text="THIS PC"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="10.5"
+                             Foreground="{StaticResource MutedBrush}"
+                             FontWeight="Medium"
+                             Margin="0,0,0,6"/>
+                    <TextBox Text="{Binding ThisPc, Mode=OneWay}"
+                             Style="{StaticResource SelectableText}"
+                             Margin="0,0,0,18"/>
+
+                    <TextBox Text="ACTIVE TARGET"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="10.5"
+                             Foreground="{StaticResource MutedBrush}"
+                             FontWeight="Medium"
+                             Margin="0,0,0,6"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                        <TextBox Text="{Binding ActiveTarget, Mode=OneWay}"
+                                 Style="{StaticResource SelectableText}"
+                                 Foreground="{StaticResource AccentBlue}"
+                                 FontWeight="Medium"
+                                 FontSize="13"/>
+                        <TextBox Text="{Binding ActiveTargetSuffix, Mode=OneWay}"
+                                 Style="{StaticResource SelectableText}"
+                                 Foreground="{StaticResource MutedBrush}"
+                                 FontSize="11"
+                                 Margin="8,1,0,0"
+                                 VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <TextBox Text="LAST ACTIVITY"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="10.5"
+                             Foreground="{StaticResource MutedBrush}"
+                             FontWeight="Medium"
+                             Margin="0,0,0,6"/>
+                    <TextBox Text="{Binding LastActivity, Mode=OneWay}"
+                             Style="{StaticResource SelectableText}"/>
+                </StackPanel>
+
+                <Grid Grid.Row="1"/>
+
+                <shared:ActionsPanel Grid.Row="2"/>
+            </Grid>
+        </Border>
+
+        <!-- ============ LOG ============ -->
+        <Grid Grid.Column="1" Background="{StaticResource BodyBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Log header -->
+            <Border Grid.Row="0"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="14,10,14,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBox Grid.Column="0"
+                             Text="LOG"
+                             Style="{StaticResource SelectableText}"
+                             FontSize="10.5"
+                             Foreground="{StaticResource MutedBrush}"
+                             FontWeight="Medium"
+                             Margin="0,2,16,0"
+                             VerticalAlignment="Center"/>
+
+                    <Grid Grid.Column="1" Width="220" VerticalAlignment="Center">
+                        <TextBox x:Name="SearchBox"
+                                 Style="{StaticResource DarkTextBox}"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"/>
+                        <TextBlock IsHitTestVisible="False"
+                                   Text="filter log&#x2026;"
+                                   Foreground="{StaticResource FaintBrush}"
+                                   FontFamily="Cascadia Mono, Consolas, Lucida Console, Courier New"
+                                   FontSize="11.5"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <CheckBox Grid.Column="3"
+                            x:Name="WordWrapCheck"
+                            IsChecked="True"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource LabelCheckBoxWordWrap}"
+                            Margin="0,0,14,0"
+                            Click="WordWrapCheck_Click"/>
+                </Grid>
+            </Border>
+
+            <!--
+                Log content: read-only RichTextBox managed by
+                LogDocumentSync (constructed in code-behind on Loaded).
+                Native drag-select across lines, Ctrl+A, Ctrl+C.
+                Cursor is I-beam over text - standard Notepad-like
+                behavior.
+            -->
+            <Grid Grid.Row="1">
+                <RichTextBox x:Name="LogView" Style="{StaticResource LogRichTextBox}"/>
+                
+                <!-- Jump to bottom overlay -->
+                <Button x:Name="JumpToBottomButton"
+                        Style="{StaticResource JumpToBottomPill}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Margin="0,0,20,20"
+                        Visibility="Collapsed"
+                        Content="&#xE70D;"
+                        Click="JumpToBottom_Click"/>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

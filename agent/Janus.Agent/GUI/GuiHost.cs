@@ -32,6 +32,7 @@ internal static class GuiHost
     private static Application? _app;
     private static GuiWindow? _window;
     private static readonly ManualResetEventSlim _ready = new(initialState: false);
+    public static string DeviceId { get; private set; } = "P";
 
     /// <summary>Start the GUI thread. Blocks until the dispatcher
     /// exists and the window is constructed (so subsequent Show()
@@ -39,6 +40,7 @@ internal static class GuiHost
     public static void Start(string deviceId)
     {
         if (_thread is not null) return;
+        DeviceId = deviceId;
 
         _thread = new Thread(() =>
         {

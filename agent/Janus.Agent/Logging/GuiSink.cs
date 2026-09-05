@@ -38,7 +38,14 @@ internal sealed class GuiSink : ILogEventSink
     {
         LogCategory category = ExtractCategory(logEvent);
         LogLevel level = MapLevel(logEvent.Level);
-        string message = RenderMessageLiterally(logEvent);
+        string message = logEvent.RenderMessage(CultureInfo.InvariantCulture);
+        
+        if (logEvent.Exception is not null)
+        {
+            // Append exception detail on new lines. Serilog's default
+            // ToString() gives type + message + stack.
+            message += Environment.NewLine + logEvent.Exception.ToString();
+        }
 
         LogSink.Write(new LogLine(
             Timestamp: logEvent.Timestamp.DateTime,
